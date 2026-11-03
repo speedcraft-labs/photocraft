@@ -35,3 +35,7 @@ harness = false
 [[bench]]
 name = "hdr_toning"
 harness = false
+
+[[bench]]
+name = "robust"
+harness = false
