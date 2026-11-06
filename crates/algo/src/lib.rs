@@ -1031,11 +1031,12 @@ pub fn working_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: 
     if area.is_empty() {
         return 0;
     }
+    let tile = auto_tile(params, bounds).max(1) as u64;
     #[cfg(not(target_arch = "wasm32"))]
-    let threads = rayon::current_num_threads().max(1) as u64;
+    let threads = (rayon::current_num_threads().max(1) as u64)
+        .min(u64::from(area.width()).div_ceil(tile).saturating_mul(u64::from(area.height()).div_ceil(tile)).max(1));
     #[cfg(target_arch = "wasm32")]
     let threads = 1u64;
-    let tile = auto_tile(params, bounds).max(1) as u64;
     let floats = (channels as u64).saturating_mul(4);
     // Result groups hold at most RESULT_BUDGET bytes of floats, and never more than the area.
     let base = area.size().area().saturating_mul(floats).min(RESULT_BUDGET as u64).saturating_mul(3);
