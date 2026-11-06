@@ -24,8 +24,8 @@
 use photocraft_color::blend::BlendMode;
 use photocraft_doc::Pattern;
 use photocraft_doc::{
-    Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Layer, LayerContent,
-    Shadow, StrokePosition,
+    Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Layer, Shadow,
+    StrokePosition,
 };
 use photocraft_geom::Rect;
 
@@ -129,20 +129,6 @@ pub(crate) fn maps_are_local(layer: &Layer) -> bool {
     })
 }
 
-/// Whether a raster layer's effect maps can be reused after translating the layer.
-///
-/// The maps are indexed relative to the layer's bounds. Noise, precision-sensitive effects,
-/// textures, masks, and group composites can depend on their absolute document coordinates, so
-/// those keep the normal location-specific cache key.
-pub(crate) fn maps_are_translation_invariant(layer: &Layer) -> bool {
-    matches!(layer.content, LayerContent::Raster(_))
-        && layer.mask.is_none()
-        && layer.vector_mask.is_none()
-        && layer.advanced.transparency_shapes
-        && maps_are_local(layer)
-        && !layer.effects.items.iter().filter(|e| e.enabled()).any(|e| matches!(e, Effect::BevelEmboss(b) if b.texture.is_some()))
-}
-
 /// A single-channel map over a rectangle.
 #[derive(Clone)]
 struct Map {
@@ -190,10 +176,11 @@ impl Map {
     }
 }
 
-/// The large, immutable part of a layer's effect maps. A translated view can share these buffers
-/// while changing the document-space rectangle used to crop them.
-struct FxMapData {
-    base_rect: Rect,
+/// Effect maps derived from a layer's shape (its alpha), computed once over the layer's whole
+/// region and cropped per render tile. They depend only on the shape, the effect settings and the
+/// global light, never on the backdrop, so they can be cached across tiles and edits.
+pub struct FxMaps {
+    rect: Rect,
     shape: Map,
     /// Per enabled effect (in `items` order): the maps it paints through.
     per: Vec<Vec<Map>>,
@@ -213,50 +200,24 @@ struct FxMapData {
     frames: Vec<(u32, Rect)>,
 }
 
-/// Effect maps derived from a layer's shape (its alpha), computed once over the layer's whole
-/// region and cropped per render tile. They depend only on the shape, the effect settings and the
-/// global light, never on the backdrop, so they can be cached across tiles and edits.
-pub struct FxMaps {
-    rect: Rect,
-    data: std::sync::Arc<FxMapData>,
-}
-
 impl FxMaps {
-    /// A view of the same local maps at a new document-space origin.
-    pub(crate) fn translated_view(&self, rect: Rect) -> Self {
-        debug_assert_eq!(self.rect.width(), rect.width());
-        debug_assert_eq!(self.rect.height(), rect.height());
-        Self { rect, data: self.data.clone() }
-    }
-
-    /// Preserve the shared pointer when the requested rectangle is already its origin.
-    pub(crate) fn translated_arc(maps: &std::sync::Arc<Self>, rect: Rect) -> std::sync::Arc<Self> {
-        if maps.rect == rect { maps.clone() } else { std::sync::Arc::new(maps.translated_view(rect)) }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn shares_data_with(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.data, &other.data)
-    }
-
     /// The frame of a gradient stroke `st` of this layer (see [`stroke_frame`]), if built.
     pub fn stroke_frame(&self, st: &photocraft_doc::StrokeFx) -> Option<Rect> {
-        let (dx, dy) = (self.rect.x0 - self.data.base_rect.x0, self.rect.y0 - self.data.base_rect.y0);
-        self.data.frames.iter().find(|f| f.0 == stroke_widths(st).1.to_bits()).map(|f| f.1.translate(dx, dy))
+        self.frames.iter().find(|f| f.0 == stroke_widths(st).1.to_bits()).map(|f| f.1)
     }
 }
 
 impl FxMaps {
     /// Approximate heap size (for cache budgeting).
     pub fn bytes(&self) -> usize {
-        let n = self.data.shape.v.len();
-        let maps: usize = self.data.per.iter().map(Vec::len).sum();
+        let n = self.shape.v.len();
+        let maps: usize = self.per.iter().map(Vec::len).sum();
         (1 + maps
-            + usize::from(self.data.din.is_some())
-            + usize::from(self.data.dout.is_some())
-            + usize::from(self.data.dout_exact.is_some())
-            + usize::from(self.data.vdout.is_some())
-            + usize::from(self.data.vdout_exact.is_some()))
+            + usize::from(self.din.is_some())
+            + usize::from(self.dout.is_some())
+            + usize::from(self.dout_exact.is_some())
+            + usize::from(self.vdout.is_some())
+            + usize::from(self.vdout_exact.is_some()))
             * n
             * 4
     }

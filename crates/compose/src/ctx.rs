@@ -72,32 +72,12 @@ pub(crate) struct LayerKeys {
     /// Addresses of every layer in the document tree, collected on first use.
     in_doc: std::sync::OnceLock<std::collections::HashSet<usize>>,
     ids: std::sync::Mutex<std::collections::HashMap<usize, u64>>,
-    translated_ids: std::sync::Mutex<std::collections::HashMap<usize, Option<u64>>>,
     /// Identities computed (tests count them).
     #[cfg(test)]
     pub(crate) built: std::sync::atomic::AtomicUsize,
 }
 
 impl LayerKeys {
-    pub(crate) fn translated_identity(&self, layer: &Layer, doc: Option<&Document>, compute: impl FnOnce() -> Option<u64>) -> Option<u64> {
-        let addr = std::ptr::from_ref(layer) as usize;
-        let in_doc = doc.is_some_and(|d| self.in_doc.get_or_init(|| doc_layer_addresses(d)).contains(&addr));
-        if !in_doc {
-            return compute();
-        }
-        let mut ids = self.translated_ids.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(identity) = ids.get(&addr) {
-            return *identity;
-        }
-        let identity = compute();
-        #[cfg(test)]
-        if identity.is_some() {
-            self.built.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        ids.insert(addr, identity);
-        identity
-    }
-
     pub(crate) fn identity(&self, layer: &Layer, doc: Option<&Document>) -> u64 {
         let addr = std::ptr::from_ref(layer) as usize;
         let in_doc = doc.is_some_and(|d| self.in_doc.get_or_init(|| doc_layer_addresses(d)).contains(&addr));
