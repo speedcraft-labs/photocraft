@@ -12,6 +12,17 @@ use super::{Layer, LayerContent, Rect, Surface, advanced, effects};
 /// cache entry keeps a [`std::sync::Weak`] to each, which reserves the tile's address (so no
 /// other tile can reuse it and match the key) without keeping its pixels alive (#4530).
 pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::DefaultHasher, pin: &mut dyn FnMut(&std::sync::Arc<photocraft_raster::Tile>)) {
+    layer_identity_in_parent(layer, h, pin, false);
+}
+
+/// `fill_opacity` affects how a layer's own effect maps are composited, not how those maps are
+/// built. For a child, it does shape the composite used to build its parent's maps.
+fn layer_identity_in_parent(
+    layer: &Layer,
+    h: &mut std::collections::hash_map::DefaultHasher,
+    pin: &mut dyn FnMut(&std::sync::Arc<photocraft_raster::Tile>),
+    in_parent_composite: bool,
+) {
     use std::hash::{Hash, Hasher};
     fn surface_fp(s: &Surface, pin: &mut dyn FnMut(&std::sync::Arc<photocraft_raster::Tile>)) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -30,11 +41,12 @@ pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::
         h.finish()
     }
     layer.id.0.hash(h);
-    // What the maps depend on: `fill_opacity` shades them; layer `opacity` is applied when the
-    // maps are composited and `visible` only skips the lookup entirely, so neither belongs in
-    // the key (an opacity drag must not rebuild shadows over the whole layer; the GPU's
-    // `fx::shape_key` keeps them out for the same reason).
-    layer.fill_opacity.to_bits().hash(h);
+    // The layer's own opacity and fill are applied when its maps are composited. For children,
+    // their fill opacity affects the group's source composite, so it belongs in the parent's key.
+    // (Visibility is likewise applied while the parent composite is built.)
+    if in_parent_composite {
+        layer.fill_opacity.to_bits().hash(h);
+    }
     match &layer.content {
         LayerContent::Group(g) => {
             for c in &g.children {
@@ -42,7 +54,7 @@ pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::
                 // composites (unlike the group's own visibility and opacity) shapes them.
                 (c.visible, c.opacity.to_bits(), c.clipped).hash(h);
                 format!("{:?}", c.blend).hash(h);
-                layer_identity(c, h, pin);
+                layer_identity_in_parent(c, h, pin, true);
             }
             format!("{:?}{:?}", g.artboard, g.frame_stroke).hash(h);
         }
