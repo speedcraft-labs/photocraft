@@ -24,6 +24,7 @@ rayon = { workspace = true }
 photocraft-testkit = { workspace = true }
 serde_json = { workspace = true }
 criterion = { workspace = true }
+sha2 = "0.10"
 
 [[bench]]
 name = "blur"
