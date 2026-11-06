@@ -254,15 +254,6 @@ pub struct Surface {
     format: PixelFormat,
     default_pixel: Box<[u8]>,
     tiles: BTreeMap<TileCoord, Arc<Tile>>,
-    /// Stable across pixel-preserving translations; replaced whenever this surface's pixels are
-    /// edited. Used by location-independent derived caches such as raster-layer effect maps.
-    translation_identity: u64,
-}
-
-static NEXT_TRANSLATION_IDENTITY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-fn next_translation_identity() -> u64 {
-    NEXT_TRANSLATION_IDENTITY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Use stack storage when it fits, otherwise reuse a dynamically sized sample buffer.
@@ -521,22 +512,7 @@ impl Surface {
 
     /// Transparent/zero surface.
     pub fn new(format: PixelFormat) -> Self {
-        Self {
-            format,
-            default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(),
-            tiles: BTreeMap::new(),
-            translation_identity: next_translation_identity(),
-        }
-    }
-
-    /// Identity of this surface's pixels before translation. Copies preserve it, a pixel edit
-    /// replaces it, and [`Surface::translated`] carries it to the shifted surface.
-    pub fn translation_identity(&self) -> u64 {
-        self.translation_identity
-    }
-
-    fn pixels_changed(&mut self) {
-        self.translation_identity = next_translation_identity();
+        Self { format, default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(), tiles: BTreeMap::new() }
     }
 
     /// Surface whose untouched pixels read as `pixel` (normalised channel values).
@@ -576,7 +552,6 @@ impl Surface {
 
     /// Mutable access to a tile, allocating it (filled with the default pixel) or un-sharing it.
     pub fn tile_mut(&mut self, c: TileCoord) -> &mut Tile {
-        self.pixels_changed();
         let fmt = self.format;
         let dp = &self.default_pixel;
         let arc = self.tiles.entry(c).or_insert_with(|| Arc::new(Tile::filled(&fmt, dp)));
@@ -586,7 +561,6 @@ impl Surface {
     /// Fallible counterpart to [`Surface::tile_mut`]. Pixel storage is reserved before changing
     /// the surface, and a shared tile is copied only after its replacement has been allocated.
     pub fn try_tile_mut(&mut self, c: TileCoord) -> Result<&mut Tile, AllocationError> {
-        self.pixels_changed();
         if let Some(tile) = self.tiles.get(&c) {
             drop(tile.try_bytes().map_err(AllocationError::ScratchRead)?);
         }
@@ -984,7 +958,6 @@ impl Surface {
     /// pixel), so they can be edited elsewhere, e.g. in parallel: `Arc::unwrap_or_clone` copies a
     /// tile only if an undo snapshot still shares it. Give them back with [`Surface::put_tiles`].
     pub fn take_tiles(&mut self, r: Rect) -> Vec<(TileCoord, Arc<Tile>)> {
-        self.pixels_changed();
         let fmt = self.format;
         let mut blank: Option<Arc<Tile>> = None;
         r.tiles()
@@ -1006,7 +979,6 @@ impl Surface {
         out.try_reserve_exact(count).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
         let has_missing = r.tiles().any(|c| !self.tiles.contains_key(&c));
         let blank = if has_missing { Some(Arc::new(Tile::try_filled(&self.format, &self.default_pixel)?)) } else { None };
-        self.pixels_changed();
         for c in r.tiles() {
             let tile = self.tiles.remove(&c).or_else(|| blank.clone());
             if let Some(tile) = tile {
@@ -1018,7 +990,6 @@ impl Surface {
 
     /// Put tiles back (see [`Surface::take_tiles`]); each replaces the tile at its coordinate.
     pub fn put_tiles(&mut self, tiles: impl IntoIterator<Item = (TileCoord, Arc<Tile>)>) {
-        self.pixels_changed();
         for (c, t) in tiles {
             self.tiles.insert(c, t);
         }
@@ -1044,7 +1015,6 @@ impl Surface {
 
     /// Fill a rectangle with one pixel value.
     pub fn fill_rect(&mut self, r: Rect, px: &[f32]) {
-        self.pixels_changed();
         let n = self.channels();
         let mut enc = vec![0u8; self.format.bytes_per_pixel()];
         encode_pixel(&self.format, &px[..n], &mut enc);
@@ -1150,8 +1120,7 @@ impl Surface {
     /// `content` must hold every pixel that isn't the default one (`content_bounds`, say): only
     /// tiles it reaches are kept.
     pub fn translated(&self, dx: i32, dy: i32, content: Rect) -> Surface {
-        let mut out =
-            Surface { format: self.format, default_pixel: self.default_pixel.clone(), tiles: BTreeMap::new(), translation_identity: self.translation_identity };
+        let mut out = Surface { format: self.format, default_pixel: self.default_pixel.clone(), tiles: BTreeMap::new() };
         let sources = || self.tiles.iter().filter(move |(c, _)| !c.rect().intersect(&content).is_empty());
         if dx % TILE_SIZE == 0 && dy % TILE_SIZE == 0 {
             let (tx, ty) = (dx / TILE_SIZE, dy / TILE_SIZE);
@@ -1311,7 +1280,6 @@ impl Surface {
     /// Applies `f` to every colour sample (not alpha), including the default pixel: a tone-curve
     /// change such as linearising when a document becomes 32-bit.
     pub fn map_color(&mut self, f: impl Fn(f32) -> f32) {
-        self.pixels_changed();
         let format = self.format;
         let color = format.mode.color_channels();
         let n = format.channels();
