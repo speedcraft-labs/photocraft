@@ -3,9 +3,9 @@ use super::ctx::{Ctx, PREPARE_DEPTH};
 use super::extents::{effect_shape, effect_source_bounds};
 use super::{Layer, LayerContent, Rect, Surface, advanced, effects};
 
-/// Hash the alpha shape of an eligible raster layer in its own local order. A whole-pixel move
-/// rebuilds the surface's boundary tiles, so tile pointer identity no longer recognizes the same
-/// silhouette. Keep this bounded: very large shapes use the pointer-based identity instead.
+/// Identity of an eligible raster layer's local alpha shape. `Surface::translated` preserves this
+/// id, while every pixel edit replaces it, so moving a styled raster can reuse its local maps
+/// without reading and hashing every alpha sample on each refresh.
 fn translated_raster_shape_identity(layer: &Layer) -> Option<u64> {
     use std::hash::{Hash, Hasher};
 
@@ -18,29 +18,12 @@ fn translated_raster_shape_identity(layer: &Layer) -> Option<u64> {
     if surface.default_pixel().get(alpha).copied()? != 0.0 {
         return None;
     }
-    let bounds = surface.content_bounds();
-    let pixels = usize::try_from(bounds.width()).ok()?.checked_mul(usize::try_from(bounds.height()).ok()?)?;
-    const MAX_SHAPE_PIXELS: usize = 8 * 1024 * 1024;
-    if pixels > MAX_SHAPE_PIXELS {
-        return None;
-    }
-
-    let channels = format.channels();
-    let generation = photocraft_raster::spill::read_error_generation();
-    let samples = if pixels == 0 { Vec::new() } else { surface.read_region(bounds) };
-    if photocraft_raster::spill::check_since(generation).is_err() {
-        return None;
-    }
-
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    surface.translation_identity().hash(&mut h);
     layer.id.0.hash(&mut h);
-    (bounds.width(), bounds.height()).hash(&mut h);
     format!("{:?}", layer.effects).hash(&mut h);
     layer.advanced.hash(&mut h);
     layer.blend_if.hash(&mut h);
-    for px in samples.chunks_exact(channels) {
-        px[alpha].to_bits().hash(&mut h);
-    }
     Some(h.finish())
 }
 
