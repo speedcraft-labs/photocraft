@@ -1,12 +1,13 @@
 //! Timing of Content-Aware Scale's seam carving alone (no document plumbing), on a synthetic
 //! photo-like RGBA image: perf scenario P28's 24 MP width change (#211), the same image's height
 //! (the transposed pass) and two images short enough for the exact full-resolution seam search.
-//! Prints an FNV-style hash of each output's bits (over 32-bit words), so a speed-up can be checked
-//! to choose exactly the same seams.
+//! Prints a SHA-256 hash of each output's bits (32-bit words in little-endian order), so a speed-up
+//! can be checked to choose exactly the same seams.
 //! `cargo run --release -p photocraft-algo --example bench_seam_cas [reps] [case filter]`
 use std::time::Instant;
 
 use photocraft_algo::seam::carve;
+use sha2::{Digest, Sha256};
 
 /// Smooth gradients, a few hard-edged shapes and fine noise: enough structure that seams are
 /// steered by content, as in a photo.
@@ -42,8 +43,12 @@ fn photo(w: usize, h: usize) -> Vec<f32> {
     img
 }
 
-fn fnv(v: &[f32]) -> u64 {
-    v.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, f| (h ^ u64::from(f.to_bits())).wrapping_mul(0x0100_0000_01b3))
+fn output_hash(v: &[f32]) -> String {
+    let mut hasher = Sha256::new();
+    for value in v {
+        hasher.update(value.to_bits().to_le_bytes());
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 fn main() {
@@ -63,16 +68,23 @@ fn main() {
         }
         let img = photo(w, h);
         let mut times = Vec::with_capacity(reps);
-        let mut hash = 0;
+        let mut hash = String::new();
+        let mut duration_ns = 0_u128;
         for _ in 0..reps {
             let t = Instant::now();
             let out = carve(w, h, 4, &img, None, nw, nh);
-            times.push(t.elapsed().as_secs_f64() * 1000.0);
-            hash = fnv(&out);
+            let elapsed = t.elapsed();
+            duration_ns = elapsed.as_nanos();
+            times.push(elapsed.as_secs_f64() * 1000.0);
+            hash = output_hash(&out);
         }
         times.sort_by(f64::total_cmp);
         let p50 = times[times.len() / 2];
         let max = times[times.len() - 1];
-        println!("{name:<48} p50 {p50:>9.1} ms  max {max:>9.1} ms  output {hash:016x}");
+        println!("{name:<48} p50 {p50:>9.1} ms  max {max:>9.1} ms  output {hash}");
+        if name.starts_with("24 MP to 90 % width") {
+            println!("CRAFT_JOURNEY_NS={duration_ns}");
+            println!("CRAFT_OUTPUT_SHA256={hash}");
+        }
     }
 }
