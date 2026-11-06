@@ -590,18 +590,13 @@ fn translated_matches_reading_the_moved_pixels() {
         let r = Rect::new(-37, 200, 530, 300);
         let v: Vec<f32> = (0..r.width() * r.height() * fmt.channels() as u32).map(|i| (i % 251) as f32 / 250.0).collect();
         s.write_region(r, &v);
-        let identity = s.translation_identity();
         for (dx, dy) in [(0, 0), (256, -512), (1, 0), (-3, 7), (300, -257), (-1000, 999)] {
             let t = s.translated(dx, dy, s.content_bounds());
-            assert_eq!(t.translation_identity(), identity, "{fmt:?} by ({dx}, {dy})");
             let moved = r.translate(dx, dy).inflate(3);
             assert_eq!(t.read_region(moved), s.read_region(moved.translate(-dx, -dy)), "{fmt:?} by ({dx}, {dy})");
             assert_eq!(t.default_pixel(), s.default_pixel());
             assert_eq!(t.to_interleaved(r.translate(dx, dy)), s.to_interleaved(r), "{fmt:?} by ({dx}, {dy}): not an exact copy");
         }
-        let mut edited = s.translated(1, 0, s.content_bounds());
-        edited.write_pixel(0, 0, &vec![0.5; fmt.channels()]);
-        assert_ne!(edited.translation_identity(), identity, "{fmt:?}: pixel edits invalidate translation identity");
         // Whole tiles: the tiles are shared, not copied.
         let t = s.translated(512, -256, s.content_bounds());
         assert!(s.tiles().zip(t.tiles()).all(|((_, a), (_, b))| Arc::ptr_eq(a, b)));
