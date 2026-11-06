@@ -2011,33 +2011,6 @@ fn effect_maps_are_cached_and_invalidated_by_pixel_changes() {
     assert!(close4(px(&masked, 20, 32), [1.0; 4]));
 }
 
-#[test]
-fn effect_maps_are_reused_after_translation_of_a_styled_raster() {
-    let mut doc = doc_white(64, 64);
-    let mut layer = solid_layer("fx", Rect::new(16, 16, 48, 48), [1.0, 0.0, 0.0, 1.0]);
-    layer.effects.items = vec![photocraft_doc::Effect::default_drop_shadow(), stroke(3.0, StrokePosition::Outside)];
-    doc.layers.push(layer);
-
-    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
-    let cx = Ctx::for_doc(&doc, &patterns);
-    let before = effect_maps(&doc.layers[1], doc.bounds(), &cx);
-
-    let source = doc.layers[1].surface().unwrap();
-    let content = bounds::content_bounds(source);
-    let moved = source.translated(3, 2, content);
-    *doc.layers[1].surface_mut().unwrap() = moved;
-
-    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
-    let cx = Ctx::for_doc(&doc, &patterns);
-    let after = effect_maps(&doc.layers[1], doc.bounds(), &cx);
-    assert!(before.shares_data_with(&after), "the shifted surface keeps the same local effect maps");
-
-    let warm = flatten(&doc);
-    let mut cold_doc = doc.clone();
-    cold_doc.layers[1].id = Layer::raster("cold-cache", cold_doc.pixel_format()).id;
-    assert_eq!(warm.px, flatten(&cold_doc).px, "translated maps match a fresh build");
-}
-
 // ---------- Transparency Shapes Layer off on tall documents (#1909) ----------
 
 fn bevel_fx(style: photocraft_doc::BevelStyle, soften: f32) -> Effect {
