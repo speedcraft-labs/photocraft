@@ -1033,8 +1033,8 @@ pub fn working_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: 
     }
     let tile = auto_tile(params, bounds).max(1) as u64;
     #[cfg(not(target_arch = "wasm32"))]
-    let threads = (rayon::current_num_threads().max(1) as u64)
-        .min(u64::from(area.width()).div_ceil(tile).saturating_mul(u64::from(area.height()).div_ceil(tile)).max(1));
+    let threads =
+        (rayon::current_num_threads().max(1) as u64).min(u64::from(area.width()).div_ceil(tile).saturating_mul(u64::from(area.height()).div_ceil(tile)).max(1));
     #[cfg(target_arch = "wasm32")]
     let threads = 1u64;
     let floats = (channels as u64).saturating_mul(4);
