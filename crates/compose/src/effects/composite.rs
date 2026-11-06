@@ -105,7 +105,10 @@ pub(crate) fn build_maps_prepared(
             }
         }
     }
-    FxMaps { rect, shape, per, bevel_paint, din, dout, dout_exact, vdout, vdout_exact, outline, frames }
+    FxMaps {
+        rect,
+        data: std::sync::Arc::new(super::FxMapData { base_rect: rect, shape, per, bevel_paint, din, dout, dout_exact, vdout, vdout_exact, outline, frames }),
+    }
 }
 
 /// Far outside any shape (distance fill for cropped distance fields).
@@ -303,7 +306,7 @@ impl<'a> EffectPass<'a> {
 
     /// Effect `i`'s map `k`, cropped to the region.
     fn fx(&self, i: usize, k: usize) -> Map {
-        self.maps.crop(&self.maps.per[i][k], self.big, 0.0)
+        self.maps.crop(&self.maps.data.per[i][k], self.big, 0.0)
     }
 
     /// The vector stroke's layer-mask value at pixel `i` (1 with no mask).
@@ -320,7 +323,7 @@ impl<'a> EffectPass<'a> {
     /// the content's own transparency acts like fill opacity: the effects still cover the whole
     /// shape.
     fn relative(&self) -> bool {
-        !self.layer.advanced.transparency_shapes || self.maps.outline || self.vstroke.is_some()
+        !self.layer.advanced.transparency_shapes || self.maps.data.outline || self.vstroke.is_some()
     }
 
     /// The effect shape: the content's alpha (with a split-off vector stroke, `content` is the
@@ -330,9 +333,9 @@ impl<'a> EffectPass<'a> {
         // Transparency Shapes Layer off: the shape is the whole layer (its masks, as the maps were
         // built), and the content's own transparency acts like fill opacity within it.
         if !self.layer.advanced.transparency_shapes {
-            self.maps.crop(&self.maps.shape, big, 0.0)
-        } else if self.maps.outline {
-            let o = self.maps.crop(&self.maps.shape, big, 0.0);
+            self.maps.crop(&self.maps.data.shape, big, 0.0)
+        } else if self.maps.data.outline {
+            let o = self.maps.crop(&self.maps.data.shape, big, 0.0);
             Map { w, h, v: o.v.iter().zip(&content.px).enumerate().map(|(i, (o, p))| o.max(self.union(i, p[3]))).collect() }
         } else {
             Map { w, h, v: content.px.iter().enumerate().map(|(i, p)| self.union(i, p[3])).collect() }
@@ -468,11 +471,11 @@ impl<'a> EffectPass<'a> {
         let (maps, big) = (self.maps, self.big);
         let crop_out = |v: &Option<Vec<f32>>| v.as_ref().map(|b| maps.crop_vec(b, big, FAR));
         StrokeFields {
-            din: maps.din.as_ref().map(|a| maps.crop_vec(a, big, 0.0)).unwrap_or_default(),
-            dout: crop_out(&maps.dout),
-            dout_exact: crop_out(&maps.dout_exact),
-            vdout: crop_out(&maps.vdout),
-            vdout_exact: crop_out(&maps.vdout_exact),
+            din: maps.data.din.as_ref().map(|a| maps.crop_vec(a, big, 0.0)).unwrap_or_default(),
+            dout: crop_out(&maps.data.dout),
+            dout_exact: crop_out(&maps.data.dout_exact),
+            vdout: crop_out(&maps.data.vdout),
+            vdout_exact: crop_out(&maps.data.vdout_exact),
         }
     }
 
@@ -502,7 +505,7 @@ impl<'a> EffectPass<'a> {
     fn paint_bevel(&self, target: &mut Buffer, kind: BevelPaint, shape: Option<&Map>) {
         for (i, e) in self.rev() {
             if let Effect::BevelEmboss(b) = e
-                && self.maps.bevel_paint[i] == kind
+                && self.maps.data.bevel_paint[i] == kind
             {
                 let map = |k: usize| match shape {
                     Some(shape) => relative_to_shape(self.fx(i, k), shape),
@@ -567,7 +570,7 @@ impl<'a> EffectPass<'a> {
         // Shape layers without a filled outline stroke their vector outline, estimated from local
         // coverage; every other layer strokes its shape. The width then picks the field.
         let vector_shape = matches!(self.layer.content, photocraft_doc::LayerContent::Shape(_));
-        let vector_outline = vector_shape && !self.maps.outline;
+        let vector_outline = vector_shape && !self.maps.data.outline;
         // Shape layers: Photoshop strokes the vector outline (estimated from local coverage
         // for unfilled shapes); the stroke never shows through the shape's pixels. Along a
         // filled shape's outline it covers the part of each edge pixel outside the path.

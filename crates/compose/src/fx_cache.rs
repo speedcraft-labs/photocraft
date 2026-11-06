@@ -3,6 +3,47 @@ use super::ctx::{Ctx, PREPARE_DEPTH};
 use super::extents::{effect_shape, effect_source_bounds};
 use super::{Layer, LayerContent, Rect, Surface, advanced, effects};
 
+/// Hash the alpha shape of an eligible raster layer in its own local order. A whole-pixel move
+/// rebuilds the surface's boundary tiles, so tile pointer identity no longer recognizes the same
+/// silhouette. Keep this bounded: very large shapes use the pointer-based identity instead.
+fn translated_raster_shape_identity(layer: &Layer) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+
+    let surface = layer.surface()?;
+    let format = surface.format();
+    if !format.alpha {
+        return None;
+    }
+    let alpha = format.mode.color_channels();
+    if surface.default_pixel().get(alpha).copied()? != 0.0 {
+        return None;
+    }
+    let bounds = surface.content_bounds();
+    let pixels = usize::try_from(bounds.width()).ok()?.checked_mul(usize::try_from(bounds.height()).ok()?)?;
+    const MAX_SHAPE_PIXELS: usize = 8 * 1024 * 1024;
+    if pixels > MAX_SHAPE_PIXELS {
+        return None;
+    }
+
+    let channels = format.channels();
+    let generation = photocraft_raster::spill::read_error_generation();
+    let samples = if pixels == 0 { Vec::new() } else { surface.read_region(bounds) };
+    if photocraft_raster::spill::check_since(generation).is_err() {
+        return None;
+    }
+
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    layer.id.0.hash(&mut h);
+    (bounds.width(), bounds.height()).hash(&mut h);
+    format!("{:?}", layer.effects).hash(&mut h);
+    layer.advanced.hash(&mut h);
+    layer.blend_if.hash(&mut h);
+    for px in samples.chunks_exact(channels) {
+        px[alpha].to_bits().hash(&mut h);
+    }
+    Some(h.finish())
+}
+
 // ---------------------------------------------------------------------------------------------
 // Layer-effect map cache
 
@@ -231,16 +272,28 @@ pub(crate) fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc
         let shape = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
         return std::sync::Arc::new(effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns));
     }
+    let translation_identity = if effects::maps_are_translation_invariant(layer) {
+        cx.layer_keys.translated_identity(layer, cx.doc, || translated_raster_shape_identity(layer))
+    } else {
+        None
+    };
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    cx.layer_keys.identity(layer, cx.doc).hash(&mut h);
-    (region.x0, region.y0, region.x1, region.y1).hash(&mut h);
+    if let Some(identity) = translation_identity {
+        identity.hash(&mut h);
+        let source = effect_source_bounds(layer, cx.canvas);
+        (region.width(), region.height(), region.x0 - source.x0, region.y0 - source.y0, region.x1 - source.x1, region.y1 - source.y1).hash(&mut h);
+    } else {
+        cx.layer_keys.identity(layer, cx.doc).hash(&mut h);
+        (region.x0, region.y0, region.x1, region.y1).hash(&mut h);
+    }
     (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
     let key = h.finish();
     // Prepared for this render (see `prepare_effects`): no global lookup, no build.
     if let Some((m, _)) = cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-        return m.clone();
+        return effects::FxMaps::translated_arc(m, region);
     }
     let maps = cached_effect_maps(layer, region, key, cx);
+    let maps = effects::FxMaps::translated_arc(&maps, region);
     cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_insert((maps, clipped)).0.clone()
 }
 
