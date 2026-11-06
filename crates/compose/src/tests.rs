@@ -2024,7 +2024,9 @@ fn effect_maps_are_reused_after_translation_of_a_styled_raster() {
 
     let source = doc.layers[1].surface().unwrap();
     let content = bounds::content_bounds(source);
+    let translation_identity = source.translation_identity();
     let moved = source.translated(3, 2, content);
+    assert_eq!(moved.translation_identity(), translation_identity, "translation preserves the local pixel identity");
     *doc.layers[1].surface_mut().unwrap() = moved;
 
     let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
