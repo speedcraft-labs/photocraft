@@ -28,6 +28,7 @@ criterion = { workspace = true }
 image = { workspace = true, features = ["png"] }
 craft-bench = { git = "https://github.com/speedcraft-labs/craft-libs", branch = "algo/integration" }
 proptest = { workspace = true }
+sha2 = "0.10"
 
 [[bench]]
 name = "blur"
