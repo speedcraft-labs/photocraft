@@ -4077,6 +4077,34 @@ fn memoised_effect_identity_leaves_every_render_unchanged() {
 }
 
 #[test]
+fn effect_identity_ignores_own_fill_but_tracks_group_child_fill() {
+    let identity = |layer: &Layer| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        crate::fx_cache::layer_identity(layer, &mut h, &mut |_| {});
+        std::hash::Hasher::finish(&h)
+    };
+
+    let mut doc = fx_doc(vec![stroke(3.0, StrokePosition::Outside), Effect::DropShadow(shadow(4.0, 120.0))]);
+    let before = render(&doc, doc.bounds());
+    let key = identity(&doc.layers[1]);
+    doc.layers[1].fill_opacity = 0.35;
+    assert_eq!(identity(&doc.layers[1]), key, "own fill opacity is applied after effect maps are built");
+    let warm = render(&doc, doc.bounds());
+    purge_effect_cache();
+    let cold = render(&doc, doc.bounds());
+    assert_eq!(warm.px, cold.px, "reused effect maps must match a cold build after a fill change");
+    assert_ne!(before.px, warm.px, "the fill change still affects the rendered layer");
+
+    let child = solid_layer("child", Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+    let mut group = Layer::group("group", vec![child]);
+    group.effects.items = vec![stroke(3.0, StrokePosition::Outside)];
+    let group_key = identity(&group);
+    let LayerContent::Group(contents) = &mut group.content else { panic!("group content") };
+    contents.children[0].fill_opacity = 0.35;
+    assert_ne!(identity(&group), group_key, "child fill opacity changes the composite used by the group's effect maps");
+}
+
+#[test]
 fn effect_identity_is_built_once_per_layer_not_per_tile() {
     let mut d = identity_doc(SampleType::U8);
     // Leave out the temporary-copy layer: it is rebuilt per call by design.
