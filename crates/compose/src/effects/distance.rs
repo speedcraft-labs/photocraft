@@ -217,156 +217,9 @@ pub(super) fn chamfer_nearest(inside: &[bool], w: usize, h: usize) -> (Vec<f32>,
 
 const CHAMFER_INF: f32 = 1e20;
 
-#[inline]
-fn consider_distance(d: &[f32], best: &mut f32, i: usize, step: f32) {
-    *best = (*best).min(d[i] + step);
-}
-
-#[inline]
-fn chamfer_forward_edge(d: &mut [f32], x: usize, y: usize, w: usize) {
-    const S2: f32 = std::f32::consts::SQRT_2;
-    const S5: f32 = 2.236_068;
-    let i = y * w + x;
-    let mut best = d[i];
-    if x > 0 {
-        consider_distance(d, &mut best, i - 1, 1.0);
-    }
-    if y > 0 {
-        if x > 0 {
-            consider_distance(d, &mut best, i - w - 1, S2);
-        }
-        consider_distance(d, &mut best, i - w, 1.0);
-        if x + 1 < w {
-            consider_distance(d, &mut best, i - w + 1, S2);
-        }
-    }
-    if y > 1 {
-        if x > 0 {
-            consider_distance(d, &mut best, i - 2 * w - 1, S5);
-        }
-        if x + 1 < w {
-            consider_distance(d, &mut best, i - 2 * w + 1, S5);
-        }
-    }
-    if y > 0 {
-        if x > 1 {
-            consider_distance(d, &mut best, i - w - 2, S5);
-        }
-        if x + 2 < w {
-            consider_distance(d, &mut best, i - w + 2, S5);
-        }
-    }
-    d[i] = best;
-}
-
-#[inline]
-fn chamfer_backward_edge(d: &mut [f32], x: usize, y: usize, w: usize, h: usize) {
-    const S2: f32 = std::f32::consts::SQRT_2;
-    const S5: f32 = 2.236_068;
-    let i = y * w + x;
-    let mut best = d[i];
-    if x + 1 < w {
-        consider_distance(d, &mut best, i + 1, 1.0);
-    }
-    if y + 1 < h {
-        if x + 1 < w {
-            consider_distance(d, &mut best, i + w + 1, S2);
-        }
-        consider_distance(d, &mut best, i + w, 1.0);
-        if x > 0 {
-            consider_distance(d, &mut best, i + w - 1, S2);
-        }
-    }
-    if y + 2 < h {
-        if x + 1 < w {
-            consider_distance(d, &mut best, i + 2 * w + 1, S5);
-        }
-        if x > 0 {
-            consider_distance(d, &mut best, i + 2 * w - 1, S5);
-        }
-    }
-    if y + 1 < h {
-        if x + 2 < w {
-            consider_distance(d, &mut best, i + w + 2, S5);
-        }
-        if x > 1 {
-            consider_distance(d, &mut best, i + w - 2, S5);
-        }
-    }
-    d[i] = best;
-}
-
-/// Chamfer distance transform. Interior pixels use a branchless minimum and an in-bounds 5 × 5
-/// stencil; only the two top/bottom rows and two left/right columns take the boundary path.
-fn chamfer_distances(mut d: Vec<f32>, w: usize, h: usize) -> Vec<f32> {
-    const S2: f32 = std::f32::consts::SQRT_2;
-    const S5: f32 = 2.236_068;
-    if w == 0 || h == 0 {
-        return d;
-    }
-
-    for y in 0..h {
-        let row = y * w;
-        if y >= 2 && w >= 5 {
-            for x in 0..2 {
-                chamfer_forward_edge(&mut d, x, y, w);
-            }
-            for x in 2..w - 2 {
-                let i = row + x;
-                let mut best = d[i].min(d[i - 1] + 1.0);
-                best = best.min(d[i - w - 1] + S2);
-                best = best.min(d[i - w] + 1.0);
-                best = best.min(d[i - w + 1] + S2);
-                best = best.min(d[i - 2 * w - 1] + S5);
-                best = best.min(d[i - 2 * w + 1] + S5);
-                best = best.min(d[i - w - 2] + S5);
-                best = best.min(d[i - w + 2] + S5);
-                d[i] = best;
-            }
-            for x in w - 2..w {
-                chamfer_forward_edge(&mut d, x, y, w);
-            }
-        } else {
-            for x in 0..w {
-                chamfer_forward_edge(&mut d, x, y, w);
-            }
-        }
-    }
-
-    for y in (0..h).rev() {
-        let row = y * w;
-        if y + 2 < h && w >= 5 {
-            for x in (w - 2..w).rev() {
-                chamfer_backward_edge(&mut d, x, y, w, h);
-            }
-            for x in (2..w - 2).rev() {
-                let i = row + x;
-                let mut best = d[i].min(d[i + 1] + 1.0);
-                best = best.min(d[i + w + 1] + S2);
-                best = best.min(d[i + w] + 1.0);
-                best = best.min(d[i + w - 1] + S2);
-                best = best.min(d[i + 2 * w + 1] + S5);
-                best = best.min(d[i + 2 * w - 1] + S5);
-                best = best.min(d[i + w + 2] + S5);
-                best = best.min(d[i + w - 2] + S5);
-                d[i] = best;
-            }
-            for x in (0..2).rev() {
-                chamfer_backward_edge(&mut d, x, y, w, h);
-            }
-        } else {
-            for x in (0..w).rev() {
-                chamfer_backward_edge(&mut d, x, y, w, h);
-            }
-        }
-    }
-    d
-}
-
 /// [`chamfer_nearest`] from per-pixel start values (`CHAMFER_INF` = not a seed): the result is
 /// the minimum over seeds of start value + path length, so partly covered seeds can start at
 /// their sub-pixel edge offset.
-#[cfg(test)]
 fn chamfer_from(mut d: Vec<f32>, w: usize, h: usize) -> (Vec<f32>, Vec<usize>) {
     const S2: f32 = std::f32::consts::SQRT_2;
     const S5: f32 = 2.236_068;
@@ -404,27 +257,6 @@ fn chamfer_from(mut d: Vec<f32>, w: usize, h: usize) -> (Vec<f32>, Vec<usize>) {
         }
     }
     (d, near)
-}
-
-#[cfg(test)]
-mod chamfer_fast_tests {
-    use super::{CHAMFER_INF, chamfer_distances, chamfer_from};
-
-    #[test]
-    fn fast_transform_matches_the_nearest_seed_transform() {
-        for (w, h) in [(0, 0), (0, 4), (4, 0), (1, 1), (1, 33), (31, 1), (2, 7), (7, 2), (5, 5), (6, 33), (33, 6), (19, 23), (96, 81)] {
-            let mut state = 0x7a31_9e2du32;
-            let start: Vec<f32> = (0..w * h)
-                .map(|_| {
-                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                    if state & 7 == 0 { (state >> 16) as f32 / u16::MAX as f32 } else { CHAMFER_INF }
-                })
-                .collect();
-            let expected = chamfer_from(start.clone(), w, h).0;
-            let actual = chamfer_distances(start, w, h);
-            assert_eq!(actual.iter().map(|d| d.to_bits()).collect::<Vec<_>>(), expected.iter().map(|d| d.to_bits()).collect::<Vec<_>>(), "{w} × {h}");
-        }
-    }
 }
 
 /// Distance from each pixel centre outside the shape to the shape's edge.
@@ -466,7 +298,7 @@ pub(super) fn dist_outside_by(s: &Map, m: Metric) -> Vec<f32> {
     if m == Metric::Chamfer {
         // Seeds start at their sub-pixel edge offset (1 − coverage).
         let start = s.v.iter().map(|&a| if a > INSIDE_EPS { 1.0 - a.min(1.0) } else { CHAMFER_INF }).collect();
-        let d = chamfer_distances(start, s.w, s.h);
+        let (d, _) = chamfer_from(start, s.w, s.h);
         return d.iter().zip(&s.v).map(|(d, &a)| if a > INSIDE_EPS { -0.5 } else { d - 0.5 }).collect();
     }
     let inside = covered(s, |a| a > INSIDE_EPS);
@@ -512,7 +344,7 @@ pub(super) fn dist_inside_by(s: &Map, m: Metric) -> Vec<f32> {
                     }
                 })
                 .collect();
-        let d = chamfer_distances(start, s.w, s.h);
+        let (d, _) = chamfer_from(start, s.w, s.h);
         return d.iter().zip(&s.v).map(|(d, &a)| if a <= INSIDE_EPS { -0.5 } else { d - 0.5 }).collect();
     }
     let outside = covered(s, |a| a <= INSIDE_EPS);
