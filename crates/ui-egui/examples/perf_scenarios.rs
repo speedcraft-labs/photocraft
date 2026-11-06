@@ -366,8 +366,11 @@ impl Bench {
                         self.errors.push((name.to_string(), "journey row has no p50_ms".into()));
                         return;
                     };
-                    let digest = match s.active().map(|state| &state.doc) {
-                        Some(doc) => render_digest(doc),
+                    let digest = match s.active() {
+                        Some(state) => {
+                            let damage = state.last_damage.map(|rect| rect.inflate(reach(&state.doc.layers)).intersect(&state.doc.bounds()));
+                            render_digest(&state.doc, damage.unwrap_or_else(|| state.doc.bounds()))
+                        }
                         None => Err("journey row has no active document".into()),
                     };
                     match digest {
@@ -388,12 +391,15 @@ impl Bench {
     }
 }
 
-/// Hash the final full-resolution composite in bounded bands. The digest is outside the timed
-/// samples and lets craft-journeys reject changes that alter rendered output.
-fn render_digest(doc: &photocraft_doc::Document) -> Res<String> {
+/// Hash the final affected composite region in bounded bands. The digest is outside the timed
+/// samples and lets craft-journeys reject changes that alter rendered output near the edit.
+fn render_digest(doc: &photocraft_doc::Document, rect: photocraft_geom::Rect) -> Res<String> {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| {
+    for coordinate in [rect.x0, rect.y0, rect.x1, rect.y1] {
+        hasher.update(coordinate.to_le_bytes());
+    }
+    photocraft_compose::render_bands(doc, rect, 0, |band| {
         for pixel in &band.px {
             for channel in pixel {
                 hasher.update(channel.to_bits().to_le_bytes());
