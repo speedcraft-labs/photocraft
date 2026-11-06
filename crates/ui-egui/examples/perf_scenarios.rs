@@ -361,6 +361,23 @@ impl Bench {
                     px.sort_unstable();
                     println!("{name:<52} refresh px {}", px[px.len() / 2]);
                 }
+                if std::env::var("CRAFT_JOURNEY_ROW").as_deref() == Ok(name) {
+                    let Some(median_ms) = r.get("p50_ms").and_then(Value::as_f64) else {
+                        self.errors.push((name.to_string(), "journey row has no p50_ms".into()));
+                        return;
+                    };
+                    let digest = match s.active().map(|state| &state.doc) {
+                        Some(doc) => render_digest(doc),
+                        None => Err("journey row has no active document".into()),
+                    };
+                    match digest {
+                        Ok(digest) => {
+                            println!("CRAFT_JOURNEY_NS={:.0}", median_ms * 1_000_000.0);
+                            println!("CRAFT_OUTPUT_SHA256={digest}");
+                        }
+                        Err(error) => self.errors.push((name.to_string(), error)),
+                    }
+                }
                 self.rows.push(r);
             }
             Err(e) => {
@@ -369,6 +386,22 @@ impl Bench {
             }
         }
     }
+}
+
+/// Hash the final full-resolution composite in bounded bands. The digest is outside the timed
+/// samples and lets craft-journeys reject changes that alter rendered output.
+fn render_digest(doc: &photocraft_doc::Document) -> Res<String> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| {
+        for pixel in &band.px {
+            for channel in pixel {
+                hasher.update(channel.to_bits().to_le_bytes());
+            }
+        }
+        Ok::<(), String>(())
+    })?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// A headless GPU canvas on a device created like the app's.
@@ -600,6 +633,21 @@ fn layered_scenarios(b: &mut Bench, sz: &Sizes) {
         let d = if i % 2 == 0 { 10 } else { -10 };
         let t = Instant::now();
         exec(s, "layer.translate", json!({"layer": target, "dx": d, "dy": d / 2}))?;
+        b.after_cmd(s, t, false)
+    });
+    b.time("change opacity / fill / move styled layer + refresh", &mut s, reps, true, |b, s, i| {
+        let t = Instant::now();
+        match i % 3 {
+            0 => {
+                exec(s, "layer.setProps", json!({"layer": target, "opacity": if (i / 3) % 2 == 0 { 0.6 } else { 0.9 }}))?;
+            }
+            1 => {
+                exec(s, "layer.setProps", json!({"layer": target, "fill": if (i / 3) % 2 == 0 { 0.5 } else { 1.0 }}))?;
+            }
+            _ => {
+                exec(s, "layer.translate", json!({"layer": target, "dx": if (i / 3) % 2 == 0 { 3 } else { -3 }, "dy": 2}))?;
+            }
+        }
         b.after_cmd(s, t, false)
     });
     b.time("move tool drag frame, styled layer", &mut s, reps, true, |b, s, i| b.drag_frame(s, target, i));
