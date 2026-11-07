@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "name": "photocraft HDR curve lookup, 512x512 pixels from pngsuite 16-bit image",
+  "revs": {
+    "old": "327c4cc82e737a3e0af7c147a477126d77525495",
+    "new": "d374c654291c3be9546c58d2b2a6c67ea494789c"
+  },
+  "fingerprint": {
+    "os": "linux",
+    "arch": "x86_64",
+    "kernel": "Linux 6.12.113+deb13-cloud-amd64",
+    "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+    "logical_cores": 6,
+    "isolation_mode": true,
+    "allowed_cpu_list": "22-27",
+    "physical_cores": 28,
+    "ram_bytes": 92724776960,
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "profile": "release",
+    "opt_level": "3",
+    "debug_assertions": false,
+    "date": "2026-11-07T17:26:29+00:00"
+  },
+  "config": {
+    "requested_repetitions": 10,
+    "runs_per_side": 10,
+    "warmup_runs": 2,
+    "resamples": 2000,
+    "seed": 12648430,
+    "output_checked": true,
+    "cpu_time": "process"
+  },
+  "guard": {
+    "contended": false,
+    "reasons": [],
+    "load_before": 0.0,
+    "load_after": 0.009900990099009901,
+    "logical_cores": 6,
+    "max_load_per_core": 0.5,
+    "load_threshold": 3.0,
+    "throttle_before": {
+      "speed_limit_pct": null,
+      "throttle_count": null
+    },
+    "throttle_after": {
+      "speed_limit_pct": null,
+      "throttle_count": null
+    }
+  },
+  "contended": false,
+  "publishable": true,
+  "inputs": [
+    {
+      "name": "basn6a16.png / 256 knots",
+      "wall": {
+        "old": {
+          "n": 10,
+          "median_ns": 15370432.0,
+          "mad_ns": 27787.5,
+          "min_ns": 15330016.0,
+          "max_ns": 16612460.0
+        },
+        "new": {
+          "n": 10,
+          "median_ns": 3605812.5,
+          "mad_ns": 4052.0,
+          "min_ns": 3593334.0,
+          "max_ns": 3620535.0
+        },
+        "ratio": {
+          "point": 0.23459408948297614,
+          "ci_lo": 0.2238986276632549,
+          "ci_hi": 0.23506892188003176
+        }
+      },
+      "cpu": {
+        "old": {
+          "n": 10,
+          "median_ns": 15371529.0,
+          "mad_ns": 27752.5,
+          "min_ns": 15331223.0,
+          "max_ns": 16613507.0
+        },
+        "new": {
+          "n": 10,
+          "median_ns": 3606959.5,
+          "mad_ns": 4142.5,
+          "min_ns": 3594441.0,
+          "max_ns": 3621642.0
+        },
+        "ratio": {
+          "point": 0.23465196598204383,
+          "ci_lo": 0.22386971663105829,
+          "ci_hi": 0.23518155502988947
+        }
+      }
+    }
+  ],
+  "aggregate": {
+    "inputs": 1,
+    "wall": {
+      "point": 0.23459408948297616,
+      "ci_lo": 0.22389862766325488,
+      "ci_hi": 0.23506892188003176
+    },
+    "cpu": {
+      "point": 0.23465196598204383,
+      "ci_lo": 0.22386971663105829,
+      "ci_hi": 0.23518155502988944
+    }
+  },
+  "runs": [
+    {
+      "order": 0,
+      "input": "basn6a16.png / 256 knots",
+      "side": "new",
+      "wall_ns": 3611818,
+      "cpu_ns": 3614319
+    },
+    {
+      "order": 1,
+      "input": "basn6a16.png / 256 knots",
+      "side": "old",
+      "wall_ns": 15330016,
+      "cpu_ns": 15331223
+    },
+    {
+      "order": 2,
+      "input": "basn6a16.png / 256 knots",
+      "side": "old",
+      "wall_ns": 15481629,
+      "cpu_ns": 15483198
+    },
+    {
+      "order": 3,
+      "input": "basn6a16.png / 256 knots",
+      "side": "new",
+      "wall_ns": 3605417,
+      "cpu_ns": 3606644
+    },
+    {
+      "order": 4,
+      "input": "basn6a16.png / 256 knots",
+      "side": "old",
+      "wall_ns": 16102899,
+      "cpu_ns": 16103882
+    },
+    {
+      "order": 5,
+      "input": "basn6a16.png / 256 knots",
+      "side": "new",
+      "wall_ns": 3606208,
+      "cpu_ns": 3607275
+    },
+    {
+      "order": 6,
+      "input": "basn6a16.png / 256 knots",
+      "side": "new",
+      "wall_ns": 3616778,
+      "cpu_ns": 3617886
+    },
+    {
+      "order": 7,
+      "input": "basn6a16.png / 256 knots",
+      "side": "old",
+      "wall_ns": 16556595,
+      "cpu_ns": 16557624
+    },
+    {
+      "order": 8,
+      "input": "basn6a16.png / 256 knots",
+      "side": "new",
+      "wall_ns": 3620535,
+      "cpu_ns": 3621642
+    },
+    {
+      "order": 9,
+      "input": "basn6a16.png / 256 knots",
+      "side": "old",
+      "wall_ns": 15375932,
+      "cpu_ns": 15376959
+    },
+    {
+      "order": 10,
+      "input": "basn6a16.png / 256 knots",
+      "side": "old",
+      "wall_ns": 15355273,
+      "cpu_ns": 15356330
+    },
+    {
+      "order": 11,
+      "input": "basn6a16.png / 256 knots",
+      "side": "new",
+      "wall_ns": 3600869,
+      "cpu_ns": 3601935
+    },
+    {
+      "order": 12,
+      "input": "basn6a16.png / 256 knots",
+      "side": "old",
+      "wall_ns": 15364932,
+      "cpu_ns": 15366099
+    },
+    {
+      "order": 13,
+      "input": "basn6a16.png / 256 knots",
+      "side": "new",
+      "wall_ns": 3602652,
+      "cpu_ns": 3603699
+    },
+    {
+      "order": 14,
+      "input": "basn6a16.png / 256 knots",
+      "side": "new",
+      "wall_ns": 3607180,
+      "cpu_ns": 3608287
+    },
+    {
+      "order": 15,
+      "input": "basn6a16.png / 256 knots",
+      "side": "old",
+      "wall_ns": 15355694,
+      "cpu_ns": 15356691
+    },
+    {
+      "order": 16,
+      "input": "basn6a16.png / 256 knots",
+      "side": "old",
+      "wall_ns": 15358240,
+      "cpu_ns": 15359466
+    },
+    {
+      "order": 17,
+      "input": "basn6a16.png / 256 knots",
+      "side": "new",
+      "wall_ns": 3605416,
+      "cpu_ns": 3606494
+    },
+    {
+      "order": 18,
+      "input": "basn6a16.png / 256 knots",
+      "side": "new",
+      "wall_ns": 3593334,
+      "cpu_ns": 3594441
+    },
+    {
+      "order": 19,
+      "input": "basn6a16.png / 256 knots",
+      "side": "old",
+      "wall_ns": 16612460,
+      "cpu_ns": 16613507
+    }
+  ]
+}

@@ -361,6 +361,40 @@ mod tests {
         }
     }
 
+    /// Run with `ARTCRAFT_HYPER_ROOT`, `CRAFT_BENCH_OUTPUT`, and `scripts/bench-run` while
+    /// holding the shared bench lock. Uses real 16-bit PNG samples and checks every output bit.
+    #[test]
+    #[ignore = "paired craft-bench measurement; run with the shared bench lock"]
+    fn hdr_curve_craft_bench() {
+        use craft_bench::{Config, Paired, report::Revs};
+
+        let root = std::env::var("ARTCRAFT_HYPER_ROOT").expect("set ARTCRAFT_HYPER_ROOT");
+        let output = std::env::var("CRAFT_BENCH_OUTPUT").expect("set CRAFT_BENCH_OUTPUT");
+        let path = std::path::Path::new(&root).join("corpus/pngsuite/basn6a16.png");
+        let real_pixels = image::open(path).expect("decode pinned 16-bit PNG").to_luma16().into_raw();
+        let samples: Vec<f32> = real_pixels.iter().cycle().take(512 * 512).map(|&sample| sample as f32 / u16::MAX as f32).collect();
+        let points: Vec<_> = (0..256)
+            .map(|index| {
+                let x = index as f32 / 255.0;
+                (x, x * x)
+            })
+            .collect();
+        let input = (points, samples);
+        let report = Paired::new("photocraft HDR curve lookup, 512x512 pixels from pngsuite 16-bit image")
+            .old(|(points, values): &(Vec<(f32, f32)>, Vec<f32>)| values.iter().map(|&x| original_curve_eval(points, x)).collect::<Vec<_>>())
+            .new(|(points, values): &(Vec<(f32, f32)>, Vec<f32>)| values.iter().map(|&x| curve_eval(points, x, true)).collect::<Vec<_>>())
+            .inputs([("basn6a16.png / 256 knots", input)])
+            .check(|old, new| old.len() == new.len() && old.iter().zip(new).all(|(a, b)| a.to_bits() == b.to_bits()))
+            .run(&Config {
+                revs: Revs { old: Some("327c4cc82e737a3e0af7c147a477126d77525495".into()), new: Some("d374c654291c3be9546c58d2b2a6c67ea494789c".into()) },
+                ..Config::default()
+            })
+            .expect("paired benchmark and output check");
+        std::fs::write(output, report.to_json()).expect("write craft-bench report");
+        eprintln!("{}", report.to_markdown());
+        assert!(report.require_publishable().is_ok(), "craft-bench report must be publishable");
+    }
+
     /// #6278: the Result swatch is the sampled colour after the shift, and a picked Result sets
     /// the sliders that give it.
     #[test]

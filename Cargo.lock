@@ -1375,6 +1375,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpu-time"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e393a7668fe1fad3075085b86c781883000b4ede868f43627b34a87c8b7ded"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1390,6 +1400,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "craft-bench"
+version = "0.1.0"
+source = "git+https://github.com/speedcraft-labs/craft-libs?branch=algo%2Fintegration#1a6b813c9cc1d3ae0bac82bdf9cfc25435dc3332"
+dependencies = [
+ "chrono",
+ "cpu-time",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5174,8 +5196,10 @@ dependencies = [
 name = "photocraft-algo"
 version = "0.20.1"
 dependencies = [
+ "craft-bench",
  "craft-blur",
  "criterion",
+ "image",
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",
