@@ -25,7 +25,13 @@ rayon = { workspace = true }
 photocraft-testkit = { workspace = true }
 serde_json = { workspace = true }
 criterion = { workspace = true }
+image = { workspace = true, features = ["png"] }
+craft-bench = { git = "https://github.com/speedcraft-labs/craft-libs", branch = "algo/integration" }
 
 [[bench]]
 name = "blur"
+harness = false
+
+[[bench]]
+name = "hdr_toning"
 harness = false

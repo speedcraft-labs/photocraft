@@ -231,18 +231,23 @@ impl Default for HdrToning {
     }
 }
 
-fn curve_eval(pts: &[(f32, f32)], x: f32) -> f32 {
+// Binary lookup retains the original arithmetic exactly: float tolerance is zero ULP.
+fn curve_eval(pts: &[(f32, f32)], x: f32, binary: bool) -> f32 {
     if pts.len() < 2 {
         return x;
     }
     if x <= pts[0].0 {
         return pts[0].1;
     }
-    for w in pts.windows(2) {
-        if x <= w[1].0 {
-            let span = (w[1].0 - w[0].0).max(1e-6);
-            return w[0].1 + (w[1].1 - w[0].1) * (x - w[0].0) / span;
-        }
+    let segment = if binary && !x.is_nan() {
+        let index = pts[1..].partition_point(|point| x > point.0);
+        pts.get(index..index + 2)
+    } else {
+        pts.windows(2).find(|pair| x <= pair[1].0)
+    };
+    if let Some(pair) = segment {
+        let span = (pair[1].0 - pair[0].0).max(1e-6);
+        return pair[0].1 + (pair[1].1 - pair[0].1) * (x - pair[0].0) / span;
     }
     pts[pts.len() - 1].1
 }
@@ -270,6 +275,7 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
     let gamma = p.gamma.clamp(0.1, 4.0);
     let mut sorted = p.curve.clone();
     sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let binary = sorted.len() > 8 && sorted.iter().all(|point| point.0.is_finite());
     // Per-pixel tone map: embarrassingly parallel (base/logl read by index).
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
@@ -284,7 +290,7 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
             // the exponent, matching the crate's other gamma controls (hdr.rs, proof_sim.rs).
             let mut l1 = (new_log.exp() * exposure).max(0.0).powf(1.0 / gamma);
             l1 += p.shadow / 100.0 * (1.0 - l1).powi(3) * 0.5 - p.highlight / 100.0 * l1.powi(3) * 0.5;
-            l1 = curve_eval(&sorted, l1.clamp(0.0, 1.0));
+            l1 = curve_eval(&sorted, l1.clamp(0.0, 1.0), binary);
             let ratio = l1 / l0;
             let mut out = c.map(|v| v * ratio);
             // Saturation then vibrance (less saturated colours move more), around the new luminance.
@@ -305,6 +311,89 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn original_curve_eval(pts: &[(f32, f32)], x: f32) -> f32 {
+        if pts.len() < 2 {
+            return x;
+        }
+        if x <= pts[0].0 {
+            return pts[0].1;
+        }
+        for pair in pts.windows(2) {
+            if x <= pair[1].0 {
+                let span = (pair[1].0 - pair[0].0).max(1e-6);
+                return pair[0].1 + (pair[1].1 - pair[0].1) * (x - pair[0].0) / span;
+            }
+        }
+        pts[pts.len() - 1].1
+    }
+
+    #[test]
+    fn hdr_curve_matches_original_exhaustively_and_randomly() {
+        let mut curves = vec![vec![], vec![(0.5, 0.2)], vec![(0.0, 1.0), (1.0, 0.0)]];
+        curves.push((0..256).map(|index| ((index / 2) as f32 / 127.0, ((index * 47) % 257) as f32 / 256.0)).collect());
+        curves.push(vec![(f32::NAN, 0.0), (0.0, 0.1), (f32::INFINITY, 1.0)]);
+        let mut nonfinite_curve = curves[3].clone();
+        nonfinite_curve.extend([(f32::NAN, 0.2), (f32::INFINITY, 0.8)]);
+        curves.push(nonfinite_curve);
+        let mut seed = 0x12345678u32;
+        for mut curve in curves {
+            curve.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let binary = curve.len() > 8 && curve.iter().all(|point| point.0.is_finite());
+            let compare = |value: f32| {
+                let expected = original_curve_eval(&curve, value);
+                let actual = curve_eval(&curve, value, binary);
+                assert!(actual.to_bits() == expected.to_bits() || (actual.is_nan() && expected.is_nan()), "input {value:?}: {actual:?} != {expected:?}");
+            };
+            for value in 0..=u16::MAX {
+                compare(f32::from(value) / 65535.0);
+            }
+            for _ in 0..100_000 {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                compare((seed as f32 / u32::MAX as f32) * 2.0 - 0.5);
+            }
+            for value in [f32::NAN, f32::NEG_INFINITY, f32::INFINITY] {
+                compare(value);
+            }
+            for &(value, _) in &curve {
+                compare(value);
+            }
+        }
+    }
+
+    /// Run with `ARTCRAFT_HYPER_ROOT`, `CRAFT_BENCH_OUTPUT`, and `scripts/bench-run` while
+    /// holding the shared bench lock. Uses real 16-bit PNG samples and checks every output bit.
+    #[test]
+    #[ignore = "paired craft-bench measurement; run with the shared bench lock"]
+    fn hdr_curve_craft_bench() {
+        use craft_bench::{Config, Paired, report::Revs};
+
+        let root = std::env::var("ARTCRAFT_HYPER_ROOT").expect("set ARTCRAFT_HYPER_ROOT");
+        let output = std::env::var("CRAFT_BENCH_OUTPUT").expect("set CRAFT_BENCH_OUTPUT");
+        let path = std::path::Path::new(&root).join("corpus/pngsuite/basn6a16.png");
+        let real_pixels = image::open(path).expect("decode pinned 16-bit PNG").to_luma16().into_raw();
+        let samples: Vec<f32> = real_pixels.iter().cycle().take(512 * 512).map(|&sample| sample as f32 / u16::MAX as f32).collect();
+        let points: Vec<_> = (0..256)
+            .map(|index| {
+                let x = index as f32 / 255.0;
+                (x, x * x)
+            })
+            .collect();
+        let input = (points, samples);
+        let report = Paired::new("photocraft HDR curve lookup, 512x512 pixels from pngsuite 16-bit image")
+            .old(|(points, values): &(Vec<(f32, f32)>, Vec<f32>)| values.iter().map(|&x| original_curve_eval(points, x)).collect::<Vec<_>>())
+            .new(|(points, values): &(Vec<(f32, f32)>, Vec<f32>)| values.iter().map(|&x| curve_eval(points, x, true)).collect::<Vec<_>>())
+            .inputs([("basn6a16.png / 256 knots", input)])
+            .check(|old, new| old.len() == new.len() && old.iter().zip(new).all(|(a, b)| a.to_bits() == b.to_bits()))
+            .run(&Config {
+                revs: Revs { old: Some("327c4cc82e737a3e0af7c147a477126d77525495".into()), new: Some("d374c654291c3be9546c58d2b2a6c67ea494789c".into()) },
+                ..Config::default()
+            })
+            .expect("paired benchmark and output check");
+        std::fs::write(output, report.to_json()).expect("write craft-bench report");
+        eprintln!("{}", report.to_markdown());
+        assert!(report.require_publishable().is_ok(), "craft-bench report must be publishable");
+    }
 
     /// #6278: the Result swatch is the sampled colour after the shift, and a picked Result sets
     /// the sliders that give it.
