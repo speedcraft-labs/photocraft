@@ -148,6 +148,7 @@ pub mod packbits {
         Ok(())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn decode_slice(src: &[u8], out: &mut [u8]) -> Result<()> {
         let mut input = 0;
         let mut output = 0;
@@ -395,6 +396,19 @@ pub(crate) fn rle_prefix<'a>(data: &'a [u8], layout: &PlaneLayout) -> Result<&'a
 fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>> {
     let rows = layout.rows()?;
     let rb = layout.row_bytes();
+
+    // Medium-sized images benefit from row parallelism. The 5.76 MB PSD and
+    // 101 MB corpus samples regressed in parallel, so keep outputs outside
+    // this range serial where task overhead or memory bandwidth dominates.
+    #[cfg(not(target_arch = "wasm32"))]
+    let parallel = (8 << 20..64 << 20).contains(&total) && rows >= 2;
+    #[cfg(target_arch = "wasm32")]
+    let parallel = false;
+
+    if !parallel {
+        return decode_rle_serial(data, layout, total, rows, rb);
+    }
+
     let mut r = Reader::new(data);
     r.check_count(rows as u64, layout.count_size() as u64)?;
     let mut offsets = Vec::new();
@@ -424,7 +438,7 @@ fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>
         return Ok(out);
     }
     #[cfg(not(target_arch = "wasm32"))]
-    if total >= 1 << 20 && rows >= 2 {
+    {
         use rayon::prelude::*;
         let error = out
             .par_chunks_mut(rb)
@@ -434,10 +448,45 @@ fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>
         if let Some(result) = error {
             result?;
         }
-        return Ok(out);
+        Ok(out)
     }
-    for (row, &(start, end)) in out.chunks_mut(rb).zip(&offsets) {
-        packbits::decode_slice(&packed[start..end], row)?;
+    #[cfg(target_arch = "wasm32")]
+    unreachable!("parallel RLE decode is disabled for wasm32")
+}
+
+fn decode_rle_serial(data: &[u8], layout: &PlaneLayout, total: usize, rows: usize, rb: usize) -> Result<Vec<u8>> {
+    let mut r = Reader::new(data);
+    r.check_count(rows as u64, layout.count_size() as u64)?;
+    let mut counts = Vec::new();
+    counts.try_reserve_exact(rows).map_err(|_| PsdError::OutOfMemory("not enough memory for the RLE row table"))?;
+    let mut packed_len = 0usize;
+    for _ in 0..rows {
+        let count = read_count(&mut r, layout.version)?;
+        packed_len = packed_len.checked_add(count).ok_or(PsdError::LimitExceeded("RLE row offset overflow"))?;
+        counts.push(count);
+    }
+    // PackBits expands at most 64x (2 input bytes -> 128 output bytes).
+    if (total as u64) > (r.remaining() as u64).saturating_mul(64) {
+        return Err(PsdError::Decompress("RLE data too short for declared size".into()));
+    }
+    let packed = r.peek_rest();
+    if packed_len > packed.len() {
+        let mut start = 0usize;
+        for &count in &counts {
+            let end = start.checked_add(count).ok_or(PsdError::LimitExceeded("RLE row offset overflow"))?;
+            if end > packed.len() {
+                return Err(PsdError::UnexpectedEof { offset: r.pos() + start, needed: end - packed.len() });
+            }
+            start = end;
+        }
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(total).map_err(|_| PsdError::OutOfMemory("not enough memory for the decoded channel data"))?;
+    let mut start = 0usize;
+    for count in counts {
+        let end = start.checked_add(count).ok_or(PsdError::LimitExceeded("RLE row offset overflow"))?;
+        packbits::decode_into(&packed[start..end], rb, &mut out)?;
+        start = end;
     }
     Ok(out)
 }

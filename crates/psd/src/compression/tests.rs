@@ -387,6 +387,30 @@ proptest::proptest! {
             proptest::prop_assert!(decode_planes(Compression::Rle, &encoded, &layout).is_err());
         }
     }
+
+    #[test]
+    fn rle_offset_table_bounds_match_checked_prefix_sum(
+        raw_counts in proptest::collection::vec(proptest::prelude::any::<u32>(), 0..32),
+        payload in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..128),
+        psb in proptest::prelude::any::<bool>(),
+    ) {
+        let version = if psb { Version::Psb } else { Version::Psd };
+        let mut encoded = Vec::new();
+        let mut total = 0u128;
+        for raw_count in &raw_counts {
+            let count = if psb { *raw_count } else { u32::from(*raw_count as u16) };
+            total += u128::from(count);
+            if psb { encoded.extend_from_slice(&count.to_be_bytes()); }
+            else { encoded.extend_from_slice(&(count as u16).to_be_bytes()); }
+        }
+        encoded.extend_from_slice(&payload);
+        let result = decode_planes(Compression::Rle, &encoded, &layout(1, 0, raw_counts.len(), 8, version));
+        let offsets_fit = total <= payload.len() as u128;
+        proptest::prop_assert_eq!(result.is_ok(), offsets_fit);
+        if offsets_fit {
+            proptest::prop_assert_eq!(result.unwrap(), Vec::<u8>::new());
+        }
+    }
 }
 
 #[test]
@@ -414,10 +438,20 @@ fn rle_accepts_trailing_padding() {
 
 #[test]
 fn rle_parallel_matches_serial_and_first_error() {
-    let layout = layout(1, 1024, 1024, 8, Version::Psd);
+    let layout = layout(1, 2048, 4608, 8, Version::Psd);
     let pixels: Vec<u8> = (0..layout.width * layout.height).map(|index| (index / 8) as u8).collect();
     let encoded = encode_planes(Compression::Rle, &pixels, &layout).unwrap();
-    assert_eq!(decode_planes(Compression::Rle, &encoded, &layout).unwrap(), pixels);
+    let parallel = decode_planes(Compression::Rle, &encoded, &layout).unwrap();
+    let mut serial = Vec::new();
+    let mut packed_at = layout.height * 2;
+    for row in 0..layout.height {
+        let count_at = row * 2;
+        let count = u16::from_be_bytes([encoded[count_at], encoded[count_at + 1]]) as usize;
+        packbits::decode_into(&encoded[packed_at..packed_at + count], layout.row_bytes(), &mut serial).unwrap();
+        packed_at += count;
+    }
+    assert_eq!(parallel, pixels);
+    assert_eq!(parallel, serial);
     let mut broken = encoded;
     let first = layout.height * 2;
     broken[first] = 127;
