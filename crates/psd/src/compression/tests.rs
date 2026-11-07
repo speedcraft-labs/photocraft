@@ -351,3 +351,120 @@ fn zip_bomb_is_bounded() {
 fn zip_garbage_errors() {
     assert!(zip_decompress(&[1, 2, 3, 4], 4).is_err());
 }
+
+proptest::proptest! {
+    #[test]
+    fn rle_rows_match_serial_decoder(
+        row_data in proptest::collection::vec(proptest::collection::vec(proptest::prelude::any::<u8>(), 0..96), 1..16),
+        width in 0usize..100,
+        psb in proptest::prelude::any::<bool>(),
+    ) {
+        let version = if psb { Version::Psb } else { Version::Psd };
+        let layout = layout(1, width, row_data.len(), 8, version);
+        let mut encoded = Vec::new();
+        for row in &row_data {
+            if psb { encoded.extend_from_slice(&(row.len() as u32).to_be_bytes()); }
+            else { encoded.extend_from_slice(&(row.len() as u16).to_be_bytes()); }
+        }
+        for row in &row_data { encoded.extend_from_slice(row); }
+        let result = decode_planes(Compression::Rle, &encoded, &layout);
+        let mut serial = Vec::new();
+        let reference = if width * row_data.len() > row_data.iter().map(Vec::len).sum::<usize>() * 64 {
+            Err(PsdError::Decompress("RLE data too short for declared size".into()))
+        } else {
+            row_data.iter().try_for_each(|row| packbits::decode_into(row, width, &mut serial)).map(|()| serial)
+        };
+        proptest::prop_assert_eq!(result, reference);
+    }
+
+    #[test]
+    fn rle_invalid_row_tables_never_panic(counts in proptest::collection::vec(0u16..256, 1..32), payload in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..128)) {
+        let layout = layout(1, 1, counts.len(), 8, Version::Psd);
+        let mut encoded = Vec::new();
+        for count in &counts { encoded.extend_from_slice(&count.to_be_bytes()); }
+        encoded.extend_from_slice(&payload);
+        if counts.iter().map(|count| usize::from(*count)).sum::<usize>() > payload.len() {
+            proptest::prop_assert!(decode_planes(Compression::Rle, &encoded, &layout).is_err());
+        }
+    }
+
+    #[test]
+    fn rle_offset_table_bounds_match_checked_prefix_sum(
+        raw_counts in proptest::collection::vec(proptest::prelude::any::<u32>(), 0..32),
+        payload in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..128),
+        psb in proptest::prelude::any::<bool>(),
+    ) {
+        let version = if psb { Version::Psb } else { Version::Psd };
+        let mut encoded = Vec::new();
+        let mut total = 0u128;
+        for raw_count in &raw_counts {
+            let count = if psb { *raw_count } else { u32::from(*raw_count as u16) };
+            total += u128::from(count);
+            if psb { encoded.extend_from_slice(&count.to_be_bytes()); }
+            else { encoded.extend_from_slice(&(count as u16).to_be_bytes()); }
+        }
+        encoded.extend_from_slice(&payload);
+        let result = decode_planes(Compression::Rle, &encoded, &layout(1, 0, raw_counts.len(), 8, version));
+        let offsets_fit = total <= payload.len() as u128;
+        proptest::prop_assert_eq!(result.is_ok(), offsets_fit);
+        if offsets_fit {
+            proptest::prop_assert_eq!(result.unwrap(), Vec::<u8>::new());
+        }
+    }
+}
+
+#[test]
+fn rle_rejects_invalid_tables() {
+    let layout = layout(1, 1, 2, 8, Version::Psd);
+    for data in [&[0, 2, 0][..], &[0, 2, 0, 3, 0, 7, 0, 8][..]] {
+        assert!(decode_planes(Compression::Rle, data, &layout).is_err());
+    }
+}
+
+#[test]
+fn rle_accepts_trailing_padding() {
+    for version in [Version::Psd, Version::Psb] {
+        for (width, height) in [(1, 2), (1024, 1024)] {
+            let layout = layout(1, width, height, 8, version);
+            let pixels: Vec<u8> = (0..width * height).map(|index| (index / 8) as u8).collect();
+            let mut encoded = encode_planes(Compression::Rle, &pixels, &layout).unwrap();
+            let unpadded = decode_planes(Compression::Rle, &encoded, &layout).unwrap();
+            encoded.extend_from_slice(&[0, 0xff, 0x80]);
+            assert_eq!(decode_planes(Compression::Rle, &encoded, &layout).unwrap(), unpadded);
+            assert_eq!(unpadded, pixels);
+        }
+    }
+}
+
+#[test]
+fn rle_parallel_matches_serial_and_first_error() {
+    let layout = layout(1, 2048, 4608, 8, Version::Psd);
+    let pixels: Vec<u8> = (0..layout.width * layout.height).map(|index| (index / 8) as u8).collect();
+    let encoded = encode_planes(Compression::Rle, &pixels, &layout).unwrap();
+    let parallel = decode_planes(Compression::Rle, &encoded, &layout).unwrap();
+    let mut serial = Vec::new();
+    let mut packed_at = layout.height * 2;
+    for row in 0..layout.height {
+        let count_at = row * 2;
+        let count = u16::from_be_bytes([encoded[count_at], encoded[count_at + 1]]) as usize;
+        packbits::decode_into(&encoded[packed_at..packed_at + count], layout.row_bytes(), &mut serial).unwrap();
+        packed_at += count;
+    }
+    assert_eq!(parallel, pixels);
+    assert_eq!(parallel, serial);
+    let mut broken = encoded;
+    let first = layout.height * 2;
+    broken[first] = 127;
+    let first_len = u16::from_be_bytes([broken[0], broken[1]]) as usize;
+    broken[first + first_len] = 127;
+    let mut serial = Vec::new();
+    let mut offset = first;
+    let reference = broken[..first].as_chunks::<2>().0.iter().try_for_each(|count| {
+        let size = u16::from_be_bytes([count[0], count[1]]) as usize;
+        let result = packbits::decode_into(&broken[offset..offset + size], layout.width, &mut serial);
+        offset += size;
+        result
+    });
+    assert!(reference.is_err());
+    assert_eq!(decode_planes(Compression::Rle, &broken, &layout).map(|_| ()), reference);
+}
