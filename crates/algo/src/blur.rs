@@ -143,14 +143,32 @@ fn conv_row<const N: usize>(src: &[f32], dst: &mut [f32], kernel: &[f32]) {
 }
 
 pub(crate) fn gaussian(src: &Image, out: Rect, ctx: &Ctx, radius: f32) -> Vec<f32> {
-    // Exact kernel for small radii; beyond that three box passes approximate the Gaussian with
-    // cost independent of the radius (Kovesi, "Fast almost-Gaussian filtering", 2010). Built
-    // from the description other devices run (`separable`), so they blur the same (#5772).
+    // Exact kernel for small radii; the CPU uses the shared YvV filter where the device plan
+    // selects the old three-box cascade. Clamp edges and alpha handling stay the same.
     match crate::separable::Separable::of(&FilterParams::GaussianBlur { radius }) {
-        Some(crate::separable::Separable::Boxes(boxes)) => box_passes(src, out, ctx.alpha, &boxes),
+        Some(crate::separable::Separable::Boxes(boxes)) => {
+            recursive_gaussian(src, out, ctx.alpha, radius).unwrap_or_else(|| box_passes(src, out, ctx.alpha, &boxes))
+        }
         Some(crate::separable::Separable::Kernel(k)) => conv_sep(src, out, &k, &k, ctx.alpha),
         None => src.crop(out),
     }
+}
+
+/// Shared YvV CPU Gaussian over the current source window. Clamp edges and alpha handling match
+/// the old box cascade; only the interior impulse response changes as the variance fix.
+fn recursive_gaussian(src: &Image, out: Rect, alpha: bool, sigma: f32) -> Option<Vec<f32>> {
+    use craft_blur::{Cancel, Edge, Gaussian, Quality, Scratch, Shape};
+    let (w, h, channels) = (src.rect.width() as usize, src.rect.height() as usize, src.ch);
+    if w == 0 || h == 0 || channels == 0 {
+        return Some(src.crop(out));
+    }
+    let shape = Shape::new(w, h, channels).ok()?;
+    let filter = Gaussian::new(sigma, Quality::RecursiveRaw).ok()?;
+    let mut pixels = src.data.clone();
+    premultiply(&mut pixels, channels, alpha);
+    filter.apply(&mut pixels, shape, Edge::Clamp, &mut Scratch::default(), Cancel::Never).ok()?;
+    unpremultiply(&mut pixels, channels, alpha);
+    Some(Image { rect: src.rect, ch: channels, data: pixels }.crop(out))
 }
 
 /// Box widths (odd) whose `n`-fold convolution has standard deviation `sigma`.

@@ -1393,6 +1393,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-blur"
+version = "0.1.0"
+source = "git+https://github.com/speedcraft-labs/craft-libs?rev=fc15099447756b34714f46e86712fb91913c8405#fc15099447756b34714f46e86712fb91913c8405"
+
+[[package]]
 name = "craft-docpath"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
@@ -5169,6 +5174,7 @@ dependencies = [
 name = "photocraft-algo"
 version = "0.20.1"
 dependencies = [
+ "craft-blur",
  "criterion",
  "photocraft-color",
  "photocraft-geom",

@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
+craft-blur = { package = "craft-blur", git = "https://github.com/speedcraft-labs/craft-libs", rev = "fc15099447756b34714f46e86712fb91913c8405" }
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["serde"] }
 # internal
 photocraft-geom = { path = "crates/geom" }
