@@ -24,36 +24,65 @@ pub fn median_f64(samples: &mut [f64]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    fn arbitrary_f32_samples() -> impl Strategy<Value = Vec<f32>> {
+        prop::collection::vec(
+            prop_oneof![
+                any::<u32>().prop_map(f32::from_bits),
+                any::<i16>().prop_map(|value| value as f32),
+                Just(0.0f32),
+                Just(-0.0f32),
+                Just(f32::INFINITY),
+                Just(f32::NEG_INFINITY),
+                Just(f32::NAN),
+            ],
+            0..1024,
+        )
+    }
+
+    fn arbitrary_f64_samples() -> impl Strategy<Value = Vec<f64>> {
+        prop::collection::vec(
+            prop_oneof![
+                any::<u64>().prop_map(f64::from_bits),
+                any::<i16>().prop_map(|value| value as f64),
+                Just(0.0f64),
+                Just(-0.0f64),
+                Just(f64::INFINITY),
+                Just(f64::NEG_INFINITY),
+                Just(f64::NAN),
+            ],
+            0..1024,
+        )
+    }
 
     #[test]
-    fn selection_matches_sorted_total_order() {
-        let mut state = 0x1234_5678_9abc_def0u64;
-        for len in 0..300 {
-            for _ in 0..20 {
-                let mut values = Vec::with_capacity(len);
-                for _ in 0..len {
-                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-                    values.push(match state % 8 {
-                        0 => f32::from_bits(0x7fc0_0000 | (state as u32 & 0xffff)),
-                        1 => f32::from_bits(0xffc0_0000 | (state as u32 & 0xffff)),
-                        2 => -0.0,
-                        3 => 0.0,
-                        4 => f32::INFINITY,
-                        5 => f32::NEG_INFINITY,
-                        _ => (state % 17) as f32,
-                    });
-                }
-                let mut sorted = values.clone();
-                sorted.sort_by(f32::total_cmp);
-                let expected = sorted.get(len / 2).map(|value| value.to_bits());
-                assert_eq!(median_f32(&mut values).map(f32::to_bits), expected);
+    fn empty_samples_have_no_median() {
+        let mut f32_samples: [f32; 0] = [];
+        let mut f64_samples: [f64; 0] = [];
+        assert_eq!(median_f32(&mut f32_samples), None);
+        assert_eq!(median_f64(&mut f64_samples), None);
+    }
 
-                let mut doubles: Vec<f64> = sorted.iter().map(|&value| value as f64).collect();
-                doubles.reverse();
-                let mut expected_doubles = doubles.clone();
-                expected_doubles.sort_by(f64::total_cmp);
-                assert_eq!(median_f64(&mut doubles).map(f64::to_bits), expected_doubles.get(len / 2).map(|value| value.to_bits()));
-            }
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+        #[test]
+        fn f32_selection_matches_full_total_order_sort(mut samples in arbitrary_f32_samples()) {
+            let mut sorted = samples.clone();
+            sorted.sort_by(f32::total_cmp);
+            let expected = sorted.get(sorted.len() / 2).map(|value| value.to_bits());
+            let actual = median_f32(&mut samples).map(f32::to_bits);
+            prop_assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn f64_selection_matches_full_total_order_sort(mut samples in arbitrary_f64_samples()) {
+            let mut sorted = samples.clone();
+            sorted.sort_by(f64::total_cmp);
+            let expected = sorted.get(sorted.len() / 2).map(|value| value.to_bits());
+            let actual = median_f64(&mut samples).map(f64::to_bits);
+            prop_assert_eq!(actual, expected);
         }
     }
 }
