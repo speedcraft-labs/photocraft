@@ -5204,6 +5204,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-raster",
  "photocraft-testkit",
+ "proptest",
  "rayon",
  "rustfft",
  "serde",

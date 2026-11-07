@@ -27,6 +27,7 @@ serde_json = { workspace = true }
 criterion = { workspace = true }
 image = { workspace = true, features = ["png"] }
 craft-bench = { git = "https://github.com/speedcraft-labs/craft-libs", branch = "algo/integration" }
+proptest = { workspace = true }
 
 [[bench]]
 name = "blur"
@@ -34,4 +35,8 @@ harness = false
 
 [[bench]]
 name = "hdr_toning"
+harness = false
+
+[[bench]]
+name = "robust"
 harness = false
