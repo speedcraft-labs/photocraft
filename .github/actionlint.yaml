@@ -1,4 +1,5 @@
-# Custom runner labels actionlint can't know about.
+# Custom labels for org self-hosted runners used by workflows in this repository.
 self-hosted-runner:
   labels:
-    - macos-release  # org larger runner (M2 Pro), used by release.yml
+    - agentbox
+    - macos-release
