@@ -122,6 +122,8 @@ struct Bench {
     /// one-edit-per-frame case; 1 when the canvas didn't show this document at all): setup work
     /// that no untimed refresh caught up on.
     last_missed: std::cell::Cell<u64>,
+    /// Prefix-cache hits and skipped passes from the last canvas refresh.
+    last_prefix: std::cell::Cell<(u64, u64)>,
 }
 
 /// One sample's command time and the canvas refresh after it.
@@ -133,6 +135,8 @@ struct Split {
     fallback: Option<&'static str>,
     /// See `Bench::last_missed`.
     missed: u64,
+    prefix_hits: u64,
+    prefix_passes_skipped: u64,
 }
 
 /// The p50 of `v` as the row's `p50_ms` takes it.
@@ -208,6 +212,7 @@ impl Bench {
                 let r = g.refresh(doc.id.0, doc, damage, None);
                 self.last_px.set(r.px);
                 self.last_kind.set(gpu_kind(&r));
+                self.last_prefix.set((r.prefix_hits, r.prefix_passes_skipped));
                 let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: None });
             }
             None => {
@@ -237,7 +242,8 @@ impl Bench {
         let cmd_ms = ms(t);
         let refresh_ms = self.refresh(s, full)?;
         let (kind, fallback) = self.last_kind.get();
-        self.split.set(Some(Split { cmd_ms, refresh_ms, kind, fallback, missed: self.last_missed.get() }));
+        let (prefix_hits, prefix_passes_skipped) = self.last_prefix.get();
+        self.split.set(Some(Split { cmd_ms, refresh_ms, kind, fallback, missed: self.last_missed.get(), prefix_hits, prefix_passes_skipped }));
         Ok(cmd_ms + refresh_ms)
     }
 
@@ -262,15 +268,18 @@ impl Bench {
             Some((g, rs)) => {
                 let r = g.refresh(doc.id.0, &shown, Some(damage), None);
                 let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: None });
+                self.last_prefix.set((r.prefix_hits, r.prefix_passes_skipped));
                 gpu_kind(&r)
             }
             None => {
                 std::hint::black_box(photocraft_compose::render(&shown, damage));
+                self.last_prefix.set((0, 0));
                 (if damage.is_empty() { "none" } else { "rect" }, None)
             }
         };
         let refresh_ms = ms(t);
-        self.split.set(Some(Split { cmd_ms, refresh_ms, kind: kind.0, fallback: kind.1, missed: 0 }));
+        let (prefix_hits, prefix_passes_skipped) = self.last_prefix.get();
+        self.split.set(Some(Split { cmd_ms, refresh_ms, kind: kind.0, fallback: kind.1, missed: 0, prefix_hits, prefix_passes_skipped }));
         Ok(cmd_ms + refresh_ms)
     }
 
@@ -331,11 +340,17 @@ impl Bench {
                     let refresh: Vec<f64> = splits.iter().map(|x| x.refresh_ms).collect();
                     let mut kinds = std::collections::BTreeMap::<&str, usize>::new();
                     let mut fallbacks = std::collections::BTreeSet::<&str>::new();
+                    let prefix_hits: u64 = splits.iter().map(|x| x.prefix_hits).sum();
+                    let prefix_passes_skipped: u64 = splits.iter().map(|x| x.prefix_passes_skipped).sum();
                     for x in splits {
                         *kinds.entry(x.kind).or_default() += 1;
                         fallbacks.extend(x.fallback);
                     }
-                    split = format!("  cmd {:.2} + refresh {:.2} ms {kinds:?}", median(&cmd), median(&refresh));
+                    split = format!(
+                        "  cmd {:.2} + refresh {:.2} ms {kinds:?}, prefix {prefix_hits} hits/{prefix_passes_skipped} passes skipped",
+                        median(&cmd),
+                        median(&refresh)
+                    );
                     // A timed refresh that also drew earlier, untimed edits overstates this row.
                     let missed = splits.iter().filter(|x| x.missed > 0).count();
                     if missed > 0 {
@@ -346,6 +361,8 @@ impl Bench {
                         o.insert("refresh_samples_ms".into(), json!(refresh));
                         o.insert("refresh_kinds".into(), json!(kinds));
                         o.insert("fallbacks".into(), json!(fallbacks));
+                        o.insert("prefix_hits".into(), json!(prefix_hits));
+                        o.insert("prefix_passes_skipped".into(), json!(prefix_passes_skipped));
                     }
                 }
                 println!(
@@ -377,6 +394,8 @@ impl Bench {
                         Ok(digest) => {
                             println!("CRAFT_JOURNEY_NS={:.0}", median_ms * 1_000_000.0);
                             println!("CRAFT_OUTPUT_SHA256={digest}");
+                            println!("CRAFT_PREFIX_HITS={prefix_hits}");
+                            println!("CRAFT_PREFIX_PASSES_SKIPPED={prefix_passes_skipped}");
                         }
                         Err(error) => self.errors.push((name.to_string(), error)),
                     }
@@ -558,8 +577,12 @@ fn main() {
         split: std::cell::Cell::new(None),
         shown: std::cell::Cell::new(None),
         last_missed: std::cell::Cell::new(0),
+        last_prefix: std::cell::Cell::new((0, 0)),
     };
     println!("perf_scenarios: {} mode, {} reps, {}", if quick { "quick" } else { "full" }, reps, adapter.as_deref().unwrap_or("CPU canvas"));
+    if let Some(adapter) = &adapter {
+        println!("CRAFT_GPU_ADAPTER={adapter}");
+    }
     let t_all = Instant::now();
 
     // A panic in one group (a crash the scenario found) is reported against the row that was

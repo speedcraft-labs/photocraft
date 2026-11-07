@@ -806,6 +806,8 @@ impl GpuCanvas {
                 // Encoding and submitting only: the GPU is still running this work.
                 out.composite_ms = now_ms() - t0;
                 out.uploads = stats.tiles_uploaded as u64;
+                out.prefix_hits = stats.prefix_hits as u64;
+                out.prefix_passes_skipped = stats.prefix_passes_skipped as u64;
                 out.gpu = stats.gpu_time;
                 return out;
             }
