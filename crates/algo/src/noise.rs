@@ -251,7 +251,7 @@ mod tests {
             let (w, h) = (rgba.width() as i32, rgba.height() as i32);
             let rect = Rect::new(0, 0, w, h);
             let mut img = Image::new(rect, 4);
-            for (dst, pixel) in img.data.chunks_exact_mut(4).zip(rgba.pixels()) {
+            for (dst, pixel) in img.data.as_chunks_mut::<4>().0.iter_mut().zip(rgba.pixels()) {
                 dst.copy_from_slice(&pixel.0);
             }
             for r in [2, 3, 7] {
