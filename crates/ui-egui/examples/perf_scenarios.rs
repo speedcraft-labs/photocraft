@@ -335,13 +335,13 @@ impl Bench {
             Ok(()) => {
                 let mut r = row(name, samples, self.sampler.peak(), self.gpu_bytes(s));
                 let mut split = String::new();
+                let prefix_hits: u64 = splits.iter().map(|x| x.prefix_hits).sum();
+                let prefix_passes_skipped: u64 = splits.iter().map(|x| x.prefix_passes_skipped).sum();
                 if !splits.is_empty() && splits.len() == samples.len() {
                     let cmd: Vec<f64> = splits.iter().map(|x| x.cmd_ms).collect();
                     let refresh: Vec<f64> = splits.iter().map(|x| x.refresh_ms).collect();
                     let mut kinds = std::collections::BTreeMap::<&str, usize>::new();
                     let mut fallbacks = std::collections::BTreeSet::<&str>::new();
-                    let prefix_hits: u64 = splits.iter().map(|x| x.prefix_hits).sum();
-                    let prefix_passes_skipped: u64 = splits.iter().map(|x| x.prefix_passes_skipped).sum();
                     for x in splits {
                         *kinds.entry(x.kind).or_default() += 1;
                         fallbacks.extend(x.fallback);
