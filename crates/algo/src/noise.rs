@@ -1,5 +1,6 @@
 //! Add Noise, Median, Dust & Scratches.
 
+use craft_blur::MedianHistogram;
 use photocraft_geom::Rect;
 
 use crate::image::Image;
@@ -81,27 +82,20 @@ fn disc_rows(r: i32) -> Vec<i32> {
         .collect()
 }
 
-/// [`median`] with a sliding histogram, at any depth: every sample of a channel's window is
-/// replaced by its rank among the window's distinct values (its level for 8-bit samples), so the
-/// histogram of the disc slides from pixel to pixel, removing one end and adding the other end of
-/// each disc row (or column) per step, and the median rank is tracked as it moves (Huang). Ranks are counted
-/// in fine bins and in blocks of bins, so the median crosses empty stretches of a large rank range
-/// a block at a time. A pixel costs O(radius) instead of a selection over O(radius^2) samples, and
-/// the value picked is the sample the selection picks (ranks follow `total_cmp`), so the output is
-/// identical.
+/// [`median`] with a sliding exact-rank histogram. Samples are encoded by their `total_cmp` rank,
+/// without quantizing arbitrary floats; 8-bit inputs use their natural 256 levels. The histogram
+/// slides along a serpentine disc path, and the shared cursor tracks only the ranks crossed by
+/// each update. The returned sample is therefore the one direct selection picks, bit for bit.
 fn median_ranked(src: &Image, out: Rect, r: i32, t: Option<f32>) -> Vec<f32> {
     let n = src.ch;
     let win = out.inflate(r);
     let (ww, wh) = (win.width() as usize, win.height() as usize);
     let rows = disc_rows(r);
-    let count: usize = rows.iter().map(|&hw| (2 * hw + 1) as usize).sum();
-    let mid = count / 2;
     let (ow, oh) = (out.width() as usize, out.height() as usize);
     let ru = r as usize;
     let mut res = vec![0.0f32; ow * oh * n];
     let mut plane = vec![0u32; ww * wh];
     let mut values = Vec::new();
-    let (mut hist, mut blocks) = (Vec::new(), Vec::new());
     for c in 0..n {
         // Window samples of this channel; outside the source reads as 0, as `Image::get` does.
         values.clear();
@@ -124,25 +118,13 @@ fn median_ranked(src: &Image, out: Rect, r: i32, t: Option<f32>) -> Vec<f32> {
             }
             sorted
         };
-        let k = levels.len();
-        // Block size: about sqrt(k) bins, a power of two.
-        let shift = (usize::BITS - k.isqrt().max(1).leading_zeros()) as usize;
-        let bs = 1usize << shift;
-        hist.clear();
-        hist.resize(k, 0u32);
-        blocks.clear();
-        blocks.resize(k.div_ceil(bs), 0u32);
-        hist.fill(0);
-        blocks.fill(0);
+        let mut hist = MedianHistogram::new(levels.len());
         // Disc of output pixel (0, 0), centred on window pixel (r, r).
         for (j, &hw) in rows.iter().enumerate() {
             for &q in &plane[j * ww + ru - hw as usize..=j * ww + ru + hw as usize] {
-                hist[q as usize] += 1;
-                blocks[q as usize >> shift] += 1;
+                hist.add(q as usize);
             }
         }
-        // `m` is the median rank and `below` the number of samples ranked under it.
-        let (mut m, mut below) = (0usize, 0usize);
         // The disc visits the rows in a serpentine (left to right, down one, right to left, ...),
         // so every move swaps one end of each disc row or column and the histogram is never
         // rebuilt. The disc is symmetric, so a column's half-height is the row's half-width.
@@ -170,34 +152,11 @@ fn median_ranked(src: &Image, out: Rect, r: i32, t: Option<f32>) -> Vec<f32> {
                 if oy > 0 || step > 0 {
                     for (gone, new) in moves {
                         let (gone, new) = (plane[gone] as usize, plane[new] as usize);
-                        hist[gone] -= 1;
-                        blocks[gone >> shift] -= 1;
-                        hist[new] += 1;
-                        blocks[new >> shift] += 1;
-                        below -= usize::from(gone < m);
-                        below += usize::from(new < m);
+                        hist.remove(gone);
+                        hist.add(new);
                     }
                 }
-                while below > mid {
-                    if m & (bs - 1) == 0 && below - blocks[(m >> shift) - 1] as usize > mid {
-                        below -= blocks[(m >> shift) - 1] as usize;
-                        m -= bs;
-                    } else {
-                        m -= 1;
-                        below -= hist[m] as usize;
-                    }
-                }
-                loop {
-                    if m & (bs - 1) == 0 && below + blocks[m >> shift] as usize <= mid {
-                        below += blocks[m >> shift] as usize;
-                        m += bs;
-                    } else if below + hist[m] as usize <= mid {
-                        below += hist[m] as usize;
-                        m += 1;
-                    } else {
-                        break;
-                    }
-                }
+                let m = hist.median().unwrap_or_default();
                 let mv = levels[m];
                 let o = src.get(out.x0 + ox as i32, out.y0 + oy as i32, c);
                 res[(oy * ow + ox) * n + c] = match t {
@@ -274,6 +233,33 @@ mod tests {
                     let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
                     let fast = bits(median_ranked(&img, out, r, t));
                     assert_eq!(fast, bits(median_direct(&img, out, r, t)), "kind {kind} r {r} threshold {t:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn median_matches_direct_selection_on_pinned_8_and_16_bit_images_when_available() {
+        let Some(root) = std::env::var_os("ARTCRAFT_CORPUS") else { return };
+        for fixture in ["basn6a08.png", "basn6a16.png"] {
+            let path = std::path::PathBuf::from(&root).join("pngsuite").join(fixture);
+            assert!(path.exists(), "missing corpus fixture {path:?}");
+            let decoded = image::open(&path);
+            assert!(decoded.is_ok(), "could not decode corpus fixture {path:?}");
+            let Ok(decoded) = decoded else { return };
+            let rgba = decoded.to_rgba32f();
+            let (w, h) = (rgba.width() as i32, rgba.height() as i32);
+            let rect = Rect::new(0, 0, w, h);
+            let mut img = Image::new(rect, 4);
+            for (dst, pixel) in img.data.chunks_exact_mut(4).zip(rgba.pixels()) {
+                dst.copy_from_slice(&pixel.0);
+            }
+            for r in [2, 3, 7] {
+                for threshold in [None, Some(0.0), Some(10.0 / 255.0)] {
+                    let bits = |values: Vec<f32>| values.into_iter().map(f32::to_bits).collect::<Vec<_>>();
+                    let actual = median(&img, rect, r as f32, threshold);
+                    let expected = median_direct(&img, rect, r, threshold.map(|t| t / 255.0));
+                    assert_eq!(bits(actual), bits(expected), "{fixture} r={r} threshold={threshold:?}");
                 }
             }
         }
