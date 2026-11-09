@@ -16,12 +16,13 @@
 //! `--depth 16` or `--depth 32` converts the document to that bit depth after opening (the
 //! conversion is part of "open"), e.g. a 36 MP 16-bit refresh: `--size 7360x4912 --depth 16 --op refresh`.
 
-use std::time::Instant;
+use std::{path::PathBuf, time::Instant};
 
 use eframe::egui_wgpu::RenderState;
 use photocraft_engine::Session;
 use photocraft_ui_egui::gpu_canvas::GpuCanvas;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
@@ -88,14 +89,15 @@ fn refresh(gpu: Option<&(GpuCanvas, RenderState)>, s: &Session, full: bool) -> &
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let (w, h) =
+    let (requested_w, requested_h) =
         arg(&args, "--size").and_then(|s| s.split_once('x').map(|(a, b)| (a.parse().unwrap_or(14000), b.parse().unwrap_or(14000)))).unwrap_or((14000, 14000));
     let op = arg(&args, "--op").unwrap_or_else(|| "open".into());
     let dir = arg(&args, "--cache").map_or_else(std::env::temp_dir, std::path::PathBuf::from);
-    let src = dir.join(format!("photocraft-bench-{w}x{h}.jpg"));
-    if !src.exists() {
+    let input = arg(&args, "--input").map(PathBuf::from);
+    let src = input.clone().unwrap_or_else(|| dir.join(format!("photocraft-bench-{requested_w}x{requested_h}.jpg")));
+    if input.is_none() && !src.exists() {
         let t = Instant::now();
-        let img = photo(w, h);
+        let img = photo(requested_w, requested_h);
         let jpeg = photocraft_codecs::encode(&img, photocraft_codecs::Format::Jpeg, &Default::default()).expect("jpeg");
         std::fs::write(&src, jpeg).expect("write cache");
         eprintln!("generated {} in {:.0} ms (run again to measure)", src.display(), ms(t));
@@ -106,14 +108,16 @@ fn main() {
     }
     let gpu = if args.iter().any(|a| a == "--cpu") { None } else { canvas() };
     let gpu = gpu.as_ref();
-    println!("document {w}×{h} ({:.0} MP), op {op}", (w as f64 * h as f64) / 1e6);
 
     let t = Instant::now();
     let bytes = std::fs::read(&src).expect("read");
-    let doc = photocraft_io::import("photo.jpg", &bytes).expect("import").document;
+    let input_name = input.as_ref().and_then(|path| path.file_name()).and_then(|name| name.to_str()).unwrap_or("photo.jpg");
+    let doc = photocraft_io::import(input_name, &bytes).expect("import").document;
+    let (w, h) = (doc.size.width, doc.size.height);
+    println!("document {w}×{h} ({:.0} MP), op {op}", (w as f64 * h as f64) / 1e6);
     drop(bytes);
     let mut s = Session::new();
-    s.open_document(doc, Some("photo.jpg".into()));
+    s.open_document(doc, Some(input_name.into()));
     match arg(&args, "--depth").as_deref() {
         Some("16") => exec(&mut s, "image.mode.bits16", json!({})),
         Some("32") => exec(&mut s, "image.mode.bits32", json!({})),
@@ -125,6 +129,7 @@ fn main() {
     let t_first = ms(t);
     println!("open (decode + document)      {t_open:>9.0} ms");
     println!("first refresh ({path:<8})       {t_first:>9.0} ms");
+    let mut journey_ns = (t_open * 1_000_000.0) as u64;
     // `--json out.json` (`cargo xtask perf`): open and first refresh (every op includes them),
     // the canvas texture size and the process's peak RSS.
     let json_out = arg(&args, "--json");
@@ -141,7 +146,7 @@ fn main() {
         }
     }
 
-    let doc = || s.active().expect("doc").doc.clone();
+    let mut output_identity = None;
     match op.as_str() {
         "open" => {}
         "refresh" => {
@@ -155,7 +160,7 @@ fn main() {
             json_rows.push(photocraft_testkit::perf::row("full refresh", &v, None, None));
         }
         "thumbs" => {
-            let d = doc();
+            let d = s.active().expect("doc").doc.clone();
             let t = Instant::now();
             std::hint::black_box(photocraft_compose::thumbnail(&d, 512));
             println!("navigator thumbnail (512)     {:>9.0} ms", ms(t));
@@ -174,6 +179,10 @@ fn main() {
             let path = refresh(gpu, &s, false);
             println!("Gaussian Blur r 10            {t1:>9.0} ms");
             println!("  refresh ({path:<8})           {:>9.0} ms", ms(t));
+            journey_ns = ((t1 + ms(t)) * 1_000_000.0) as u64;
+            let filtered_doc = s.active().expect("doc").doc.clone();
+            let out = photocraft_io::export(&filtered_doc, "x.psd", &Default::default()).expect("export filtered PSD for output check");
+            output_identity = Some(format!("{:x}", Sha256::digest(&out.bytes)));
         }
         "invert" => {
             // Image › Adjustments on the whole layer (#1772), then on a half-transparent layer.
@@ -206,10 +215,15 @@ fn main() {
         }
         "psd" | "png" | "jpeg" | "pcraft" => {
             let ext = if op == "jpeg" { "jpg" } else { op.as_str() };
-            let d = doc();
+            let d = s.active().expect("doc").doc.clone();
             let t = Instant::now();
             let out = photocraft_io::export(&d, &format!("x.{ext}"), &Default::default()).expect("export");
+            let output =
+                arg(&args, "--output").unwrap_or_else(|| std::env::temp_dir().join(format!("craft-journeys-photo.{ext}")).to_string_lossy().into_owned());
+            std::fs::write(&output, &out.bytes).expect("write export");
             println!("save {ext:<6} ({:>5} MB)          {:>9.0} ms", out.bytes.len() >> 20, ms(t));
+            journey_ns = (ms(t) * 1_000_000.0) as u64;
+            output_identity = Some(format!("{:x}", Sha256::digest(&out.bytes)));
         }
         other => eprintln!("unknown --op {other}"),
     }
@@ -222,4 +236,9 @@ fn main() {
             eprintln!("{e}");
         }
     }
+    println!("CRAFT_JOURNEY_NS={journey_ns}");
+    println!(
+        "CRAFT_OUTPUT_SHA256={}",
+        output_identity.unwrap_or_else(|| format!("{:x}", Sha256::digest(std::fs::read(&src).expect("read input for identity"))))
+    );
 }
