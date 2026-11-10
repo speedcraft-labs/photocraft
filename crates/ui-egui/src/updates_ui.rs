@@ -116,6 +116,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             craft_update::CheckResultResponse::CheckAgain => {
                 let _ = check(app, ctx, serde_json::json!({}));
             }
+            craft_update::CheckResultResponse::RestartToUpdate => app.updates_rt.updater.restart_to_update(),
         }
     }
 }
