@@ -57,6 +57,7 @@ fn layer_identity_in_parent(
                 layer_identity_in_parent(c, h, pin, true);
             }
             format!("{:?}{:?}", g.artboard, g.frame_stroke).hash(h);
+            format!("{:?}", layer.frame).hash(h);
         }
         LayerContent::Fill(f) => {
             format!("{f:?}").hash(h);
