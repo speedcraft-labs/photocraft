@@ -331,10 +331,10 @@ impl Bench {
 
     /// Reports a row. `splits` (one per sample, or none) adds the command / refresh split.
     fn record(&mut self, name: &str, s: &Session, samples: &[f64], splits: &[Split], result: Res<()>) {
-        self.record_with_gpu_bytes(name, samples, splits, result, self.gpu_bytes(s));
+        self.record_with_gpu_bytes(name, Some(s), samples, splits, result, self.gpu_bytes(s));
     }
 
-    fn record_with_gpu_bytes(&mut self, name: &str, samples: &[f64], splits: &[Split], result: Res<()>, gpu_bytes: Option<u64>) {
+    fn record_with_gpu_bytes(&mut self, name: &str, session: Option<&Session>, samples: &[f64], splits: &[Split], result: Res<()>, gpu_bytes: Option<u64>) {
         match result {
             Ok(()) => {
                 let mut r = row(name, samples, self.sampler.peak(), gpu_bytes);
@@ -387,7 +387,7 @@ impl Bench {
                         self.errors.push((name.to_string(), "journey row has no p50_ms".into()));
                         return;
                     };
-                    let digest = match s.active() {
+                    let digest = match session.and_then(|session| session.active()) {
                         Some(state) => {
                             let damage = state.last_damage.map(|rect| rect.inflate(reach(&state.doc.layers)).intersect(&state.doc.bounds()));
                             render_digest(&state.doc, damage.unwrap_or_else(|| state.doc.bounds()))
@@ -726,7 +726,7 @@ fn first_document_scenarios(b: &mut Bench, sz: &Sizes) {
             break;
         } else {
             // Each sample owns a separate canvas that has already been dropped.
-            b.record_with_gpu_bytes(name, &samples, &[], Ok(()), None);
+            b.record_with_gpu_bytes(name, None, &samples, &[], Ok(()), None);
         }
     }
 }
