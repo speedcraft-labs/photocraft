@@ -1134,4 +1134,7 @@ impl GpuCanvas {
 mod mip_tests;
 
 #[cfg(test)]
+mod sharp_tests;
+
+#[cfg(test)]
 mod tests;
