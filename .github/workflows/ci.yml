@@ -116,7 +116,8 @@ jobs:
           lock = tomllib.load(open("Cargo.lock", "rb"))
           bad = sorted({p["source"] for p in lock.get("package", [])
                         if p.get("source", "").startswith("git+")
-                        and not p["source"].startswith("git+https://github.com/storytold/")})
+                        and not p["source"].startswith("git+https://github.com/storytold/")
+                        and not p["source"].startswith("git+https://github.com/speedcraft-labs/craft-libs?")})
           if bad:
               print("Git dependencies outside github.com/storytold:", *bad, sep="\n")
               sys.exit(1)
