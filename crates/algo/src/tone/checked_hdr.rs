@@ -220,7 +220,7 @@ pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl:
                     return Err(Error::NonFiniteSample);
                 }
             }
-            l1 = curve_eval(&curve, l1.clamp(0., 1.));
+            l1 = curve_eval(&curve, l1.clamp(0., 1.), false);
             let mut out = c.map(|v| v * (l1 / l0));
             let ll = luma(out);
             let (mx, mn) = (out[0].max(out[1]).max(out[2]), out[0].min(out[1]).min(out[2]));
