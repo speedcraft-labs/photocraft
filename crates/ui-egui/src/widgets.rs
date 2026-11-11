@@ -10,6 +10,7 @@ mod color_count;
 pub use angle_dial::{angle_dial_line, angle_dial_row};
 pub use color_count::color_count_row;
 mod type_ahead;
+pub use type_ahead::close_list as close_dropdown_list;
 pub use type_ahead::list_open as dropdown_list_open;
 
 mod buttons;
@@ -44,14 +45,15 @@ pub use color::{
 #[cfg(test)]
 use color::{checker_tile_id, checker_uv};
 pub use dropdown::{
-    combo_list, dropdown, dropdown_hovered, dropdown_literal, dropdown_wheel_grouped, dropdown_wheel_hovered, dropdown_with_tooltips, menu_scroll, swatch_popup,
+    combo_list, dropdown, dropdown_hovered, dropdown_literal, dropdown_wheel_grouped, dropdown_wheel_grouped_enabled, dropdown_wheel_hovered,
+    dropdown_with_tooltips, menu_scroll, swatch_popup,
 };
 pub(crate) use fields::compact_wrapping_value_field;
 #[cfg(test)]
 use fields::{FieldOpts, NUMERIC_INPUT_LIMIT, value_field_in};
 pub use fields::{
     POPUP_ARROW_W, PopupFieldResponse, VALUE_FIELD_H, compact_value_field, elided_label, elided_label_sensed, popup_value_field, typed_text_parses,
-    value_field, value_field_named, value_field_whole_alerting,
+    value_field, value_field_named, value_field_whole_alerting, value_field_with_trailing,
 };
 pub(crate) use panel::body_margin;
 pub use panel::{
