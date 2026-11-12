@@ -774,6 +774,30 @@ available in custom workspaces. `window.panel.<id> {show:true}` always reveals, 
 and expands the panel, including when another tab is selected. Workspace snapshots
 retain custom collapse settings and Timeline visibility.
 
+### Opt-in accepted-input frame timing
+
+Desktop builds start this recorder only with PHOTOCRAFT_LATENCY_RECORDER=1. The harness
+arms one observation with ui.latency.arm {"id":"sample-1","action":"brush"}, queues normal
+egui pointer events with ui.latency.input {"events":[{"kind":"down","x":...,"y":...}, ...]},
+then reads the result with ui.latency.wait {"id":"sample-1"}. ui.latency.input places events
+in the same synthetic input queue used by the desktop shell; egui dispatches them through the
+ordinary canvas, tool and brush handlers. It does not call a brush or tool command directly.
+Actions accepted are brush, visibility, blend, move, zoom, pan, open and save. Pointer events
+are move, down and up; wheel events use kind:"wheel" with deltaX and deltaY. Use screen points
+as reported by ui.inspect.
+
+Pointer clocks start in raw_input_hook after the app has accepted an input event. Brush, move and
+pan gestures finish on release; zoom finishes on its wheel or pinch event. Records retain a sample
+for each accepted pointer or view event, each ending at the first GPU-complete frame that consumed
+that event. Visibility and blend actions also finish on release, but the action-level result waits
+for a completed full-document canvas refresh for the active document. Open starts when its control
+request is dispatched on the UI thread and ends after import and the first completed full-document
+composite. Save starts on dispatch and ends after its save job completes and a GPU-complete frame.
+The endpoint confirms GPU work completion for that frame; it is not a scanout or photon timestamp.
+ui.latency.wait reads an already-created record on the control socket thread, without a UI dispatch
+or repaint. With the environment variable unset, the recorder, its worker, and its frame callback
+are absent.
+
 ### Select the layer under the pointer
 
 Assign **Select Layer Under Cursor** in Keyboard Shortcuts to choose the topmost visible, pickable layer beneath the canvas pointer. Empty pixels and points outside the document leave the selection unchanged; dialogs, strokes and brush-resize gestures block it. The command follows zoom, pan, view rotation and horizontal flipping. Agents can invoke `ui.menu.invoke {"id":"layer.selectUnderCursor"}` after moving the screen pointer with `ui.move {"x": ..., "y": ...}`. The command has no default shortcut.
