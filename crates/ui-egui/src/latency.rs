@@ -47,6 +47,7 @@ struct Active {
     action: String,
     accepted: Option<u64>,
     command_completed: bool,
+    input_completion_allowed: bool,
 }
 
 impl Recorder {
@@ -82,7 +83,8 @@ impl Recorder {
         }
         state.records.push(json!({"id":id,"action":action,"accepted_ns":null,"completed_ns":null,
             "duration_ns":null,"endpoint":"accepted-input-frame-gpu-work-complete","input_samples":[]}));
-        self.active = Some(Active { id: id.into(), action: action.into(), accepted: None, command_completed: false });
+        self.active =
+            Some(Active { id: id.into(), action: action.into(), accepted: None, command_completed: false, input_completion_allowed: action != "blend" });
         self.queued.clear();
         Ok(())
     }
@@ -101,6 +103,14 @@ impl Recorder {
         let Some(active) = self.active.as_mut().filter(|active| active.action == action && active.accepted.is_some()) else { return };
         active.command_completed = true;
         self.queued.push(("command-complete".into(), at));
+    }
+
+    /// A blend-mode UI action includes opening the dropdown and selecting an option. The driver
+    /// marks the second pointer release as the semantic endpoint.
+    pub(crate) fn set_input_completion_allowed(&mut self, allowed: bool) {
+        if let Some(active) = self.active.as_mut().filter(|active| active.action == "blend") {
+            active.input_completion_allowed = allowed;
+        }
     }
 
     /// Stamp events after the OS/egui host has placed them in this frame's input queue.
@@ -140,7 +150,8 @@ impl Recorder {
         let release = queued.iter().any(|(kind, _)| kind == "up");
         let view_step = queued.iter().any(|(kind, _)| kind == "view");
         let finish = match active.action.as_str() {
-            "brush" | "visibility" | "blend" | "move" | "pan" => release,
+            "brush" | "visibility" | "move" | "pan" => release,
+            "blend" => release && active.input_completion_allowed,
             "zoom" => view_step,
             "open" | "save" => active.command_completed,
             _ => false,
@@ -326,5 +337,21 @@ mod tests {
         r.complete_command("open");
         r.frame_callback().unwrap()();
         assert!(rx.recv().unwrap()["result"]["duration_ns"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn blend_waits_for_the_layer_mode_selection_release() {
+        let mut r = Recorder { epoch: Instant::now(), state: Arc::new(Mutex::new(State::default())), active: None, queued: Vec::new() };
+        r.arm(&json!({"id":"blend-1","action":"blend"})).unwrap();
+        let click =
+            |pressed| egui::Event::PointerButton { pos: egui::pos2(8.0, 8.0), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        r.set_input_completion_allowed(false);
+        r.accept_events(&[click(true), click(false)]);
+        r.frame_callback().unwrap()();
+        assert!(r.active.is_some(), "opening the blend list does not finish the mode change");
+        r.set_input_completion_allowed(true);
+        r.accept_events(&[click(true), click(false)]);
+        r.frame_callback().unwrap()();
+        assert!(r.active.is_none());
     }
 }

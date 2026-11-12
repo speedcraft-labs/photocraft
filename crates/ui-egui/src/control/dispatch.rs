@@ -1097,6 +1097,10 @@ fn latency_input(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Out
     if app.latency.is_none() {
         return err("latency recorder disabled");
     }
+    let complete = p.get("complete").and_then(Value::as_bool).unwrap_or(true);
+    if let Some(recorder) = app.latency.as_mut() {
+        recorder.set_input_completion_allowed(complete);
+    }
     let Some(events) = p.get("events").and_then(Value::as_array) else {
         return err("events must be an array");
     };
