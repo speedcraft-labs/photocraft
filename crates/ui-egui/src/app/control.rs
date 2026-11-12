@@ -1,6 +1,14 @@
 use super::{ControlRequest, PhotocraftApp, Receiver, gpu_canvas};
 
 impl PhotocraftApp {
+    /// Make the UI pass run for a control request without stealing the user's keyboard focus.
+    pub(crate) fn raise_for_control(&mut self, ctx: &egui::Context) {
+        if let Some(raise) = self.services.raise_without_focus.as_mut() {
+            raise();
+        }
+        ctx.request_repaint();
+    }
+
     /// Attach a control channel (requests arrive from a transport thread: TCP, stdin, tests).
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
@@ -34,6 +42,10 @@ impl PhotocraftApp {
                 let _ = reply.send(serde_json::json!({"ok": false, "error": crate::control::expired_error()}));
                 continue;
             }
+            // UI requests need a rendered pass, but must not activate the app for an agent.
+            if req.method.starts_with("ui.") && req.method != "ui.focus" {
+                self.raise_for_control(ctx);
+            }
             match crate::control::handle(self, ctx, &req) {
                 crate::control::Outcome::Done(v) => {
                     let _ = reply.send(v);
@@ -54,5 +66,25 @@ impl PhotocraftApp {
             self.sync_mask_targets();
         }
         self.control_rx = Some(rx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn raising_for_control_uses_the_host_hook_without_focusing_the_viewport() {
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let callback_called = called.clone();
+        let services = crate::Services {
+            raise_without_focus: Some(Box::new(move || callback_called.store(true, std::sync::atomic::Ordering::Relaxed))),
+            ..Default::default()
+        };
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), || app.raise_for_control(&ctx));
+
+        assert!(called.load(std::sync::atomic::Ordering::Relaxed));
+        let focused = output.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|output| output.commands.contains(&egui::ViewportCommand::Focus));
+        assert!(!focused, "control UI requests must not activate the app");
     }
 }
