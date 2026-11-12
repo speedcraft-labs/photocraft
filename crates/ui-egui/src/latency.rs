@@ -294,7 +294,16 @@ pub(crate) fn frame(app: &mut crate::PhotocraftApp, ui: &egui::Ui, frame: &efram
         let events: Vec<_> = events.into_iter().map(|(kind, accepted_ns)| json!({"kind":kind,"accepted_ns":accepted_ns})).collect();
         let state = recorder.state.clone();
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
-            let hash = frame_crop_hash(&image);
+            let crop = frame_crop_rgb(&image);
+            let hash = frame_crop_hash(&crop);
+            let pixel_path = std::env::var_os("PHOTOCRAFT_LATENCY_FRAME_CAPTURE_DIR").and_then(|dir| {
+                let first_event = events.first()?.get("accepted_ns")?.as_u64()?;
+                let safe_id: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+                let path = std::path::PathBuf::from(dir).join(format!("{safe_id}-{first_event}.rgb"));
+                std::fs::create_dir_all(path.parent()?).ok()?;
+                std::fs::write(&path, &crop).ok()?;
+                Some(path)
+            });
             let mut state = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(record) = state.records.iter_mut().find(|record| record["id"] == id) else { return };
             let release_frame = events.iter().any(|event| event["kind"] == "up");
@@ -302,7 +311,7 @@ pub(crate) fn frame(app: &mut crate::PhotocraftApp, ui: &egui::Ui, frame: &efram
                 record["frame_pixel_hash"] = json!(hash.clone());
             }
             if let Some(captures) = record["frame_captures"].as_array_mut() {
-                captures.push(json!({"accepted_events":events,"pixel_hash":hash}));
+                captures.push(json!({"accepted_events":events,"pixel_hash":hash,"pixel_path":pixel_path.map(|path| path.to_string_lossy().to_string())}));
             }
             if !record["completed_ns"].is_null() {
                 let result = record.clone();
@@ -337,19 +346,26 @@ pub(crate) fn frame(app: &mut crate::PhotocraftApp, ui: &egui::Ui, frame: &efram
     ui.painter().add(egui_wgpu::Callback::new_paint_callback(ui.max_rect(), Fence { done: Mutex::new(Some(done)), poller: poller.clone() }));
 }
 
-/// FNV-1a over the centre crop used by the journey's pixel proof, in RGB order.
-fn frame_crop_hash(image: &egui::ColorImage) -> String {
+/// Centre crop used by the journey's pixel proof, in RGB order.
+fn frame_crop_rgb(image: &egui::ColorImage) -> Vec<u8> {
     let [width, height] = image.size;
     let (x0, x1) = (width * 476 / 1600, width * 836 / 1600);
     let (y0, y1) = (height * 354 / 1000, height * 714 / 1000);
-    let mut hash = 0xcbf29ce484222325u64;
+    let mut rgb = Vec::with_capacity((x1 - x0) * (y1 - y0) * 3);
     for y in y0..y1 {
         for x in x0..x1 {
-            for byte in image.pixels[y * width + x].to_array()[..3].iter().copied() {
-                hash ^= u64::from(byte);
-                hash = hash.wrapping_mul(0x100000001b3);
-            }
+            rgb.extend_from_slice(&image.pixels[y * width + x].to_array()[..3]);
         }
+    }
+    rgb
+}
+
+/// FNV-1a over the crop, in RGB order.
+fn frame_crop_hash(rgb: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in rgb {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
 }
