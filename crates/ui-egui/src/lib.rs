@@ -41,6 +41,7 @@ mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
 pub(crate) mod last_brush;
+pub mod latency;
 pub mod levels_clipping;
 pub mod links;
 pub mod memory_warning;
@@ -459,6 +460,8 @@ pub struct PhotocraftApp {
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
+    /// Opt-in input-to-presented-frame timing; absent in ordinary launches.
+    pub(crate) latency: Option<latency::Recorder>,
     /// `ui.screenshot` requests: bounded admission, a weak-slot callback per issuance, monotonic
     /// deadlines and a capture-time geometry epoch (see `screenshot.rs`).
     captures: screenshot::Captures,

@@ -182,6 +182,13 @@ pub(super) enum EngineStroke {
 }
 
 impl EngineStroke {
+    fn dab_count(&self) -> Option<usize> {
+        match self {
+            EngineStroke::Brush(s) => Some(s.dab_count()),
+            EngineStroke::Retouch(_) | EngineStroke::Dab(_) | EngineStroke::Mixer(_) => None,
+        }
+    }
+
     /// The brush engine's strokes can change while the pointer is held still (see
     /// `LiveStroke::wants_time`); the retouch strokes don't.
     pub(super) fn wants_time(&self) -> bool {
@@ -732,6 +739,11 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
         let _ = app.run(stroke_command(app, d.tool), p);
         return;
     };
+    if let Some(count) = stroke.dab_count()
+        && let Some(recorder) = app.latency.as_mut()
+    {
+        recorder.record_brush_dab_count(count);
+    }
     let before = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone());
     if let EngineStroke::Brush(stroke) = stroke
         && app.session.offer_live_stroke(*stroke).is_err()

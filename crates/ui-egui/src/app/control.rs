@@ -42,6 +42,12 @@ impl PhotocraftApp {
                 let _ = reply.send(serde_json::json!({"ok": false, "error": crate::control::expired_error()}));
                 continue;
             }
+            if req.method == "ui.latency.arm" {
+                let result = self.latency.as_mut().ok_or("latency recorder disabled").and_then(|r| r.arm(&req.params));
+                let value = result.map_or_else(|e| serde_json::json!({"ok":false,"error":e}), |_| serde_json::json!({"ok":true,"result":{"armed":true}}));
+                let _ = reply.send(value);
+                continue;
+            }
             // UI requests need a rendered pass, but must not activate the app for an agent.
             if req.method.starts_with("ui.") && req.method != "ui.focus" {
                 self.raise_for_control(ctx);
