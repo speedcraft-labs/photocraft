@@ -834,6 +834,27 @@ retain custom collapse settings and Timeline visibility.
 ### Frame Tool controls
 
 `ui.set {"tool":"frame","frameShape":"rectangle|ellipse|triangle|polygon|custom","frameSides":5,"frameTarget":"frame|content|both"}` selects creation options or the target inside the active frame. `ui.inspect` includes `frameTool`. `layer.frame.info {"layer":id}` queries geometry, stroke, and content without adding history. Frame edits use `layer.frame.set`, `layer.frame.fit`, `layer.frame.convert` and `layer.frame.setContent`; placement accepts `frame: id` to target an explicit frame or `frame: false` to place outside frames. See [Frame Tool behavior and persistence limits](frame-tool.md).
+### Opt-in accepted-input frame timing
+
+Desktop builds start this recorder only with PHOTOCRAFT_LATENCY_RECORDER=1. The harness
+arms one observation with ui.latency.arm {"id":"sample-1","action":"brush"}, queues normal
+egui pointer events with ui.latency.input {"events":[{"kind":"down","x":...,"y":...}, ...]},
+then reads the result with ui.latency.wait {"id":"sample-1"}. ui.latency.input places events
+in the same synthetic input queue used by the desktop shell; egui dispatches them through the
+ordinary canvas, tool and brush handlers. It does not call a brush or tool command directly.
+Actions accepted are brush, visibility, blend, move, zoom, pan, open and save. Pointer events
+are move, down and up; wheel events use kind:"wheel" with deltaX and deltaY. Use screen points
+as reported by ui.inspect.
+
+Pointer clocks start in raw_input_hook after the app has accepted an input event. Brush, layer
+visibility, blend, move and pan gestures finish on release; zoom finishes on its wheel or pinch
+event. Records retain a sample for each accepted pointer or view event, each ending at the first
+GPU-complete frame that consumed that event. Open and Save clocks start when the corresponding
+control request is dispatched on the UI thread and finish after the document import or save job
+completes, at the first GPU-complete frame afterward. The endpoint confirms GPU work completion
+for that frame; it is not a scanout or photon timestamp. ui.latency.wait reads an already-created
+record on the control socket thread, without a UI dispatch or repaint. With the environment
+variable unset, the recorder, its worker, and its frame callback are absent.
 
 ### Select the layer under the pointer
 
