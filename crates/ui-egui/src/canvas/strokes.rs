@@ -207,6 +207,12 @@ impl EngineStroke {
             Self::Mixer(s) => s.bounds(),
         }
     }
+    fn dab_count(&self) -> Option<usize> {
+        match self {
+            EngineStroke::Brush(s) => Some(s.dab_count()),
+            EngineStroke::Retouch(_) | EngineStroke::Dab(_) | EngineStroke::Mixer(_) => None,
+        }
+    }
     fn push(&mut self, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
         match self {
             Self::Brush(s) => s.push(pts),
@@ -244,6 +250,10 @@ pub(crate) struct LiveStroke {
 impl LiveStroke {
     pub(super) fn display_key(&self) -> u64 {
         self.key + self.damage.len() as u64
+    }
+
+    pub(super) fn dab_count(&self) -> Option<usize> {
+        self.stroke.dab_count()
     }
 
     /// What changed since the canvas showed preview `key` (0 = the document before the stroke).
@@ -653,6 +663,11 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
                 return;
             }
         }
+    }
+    if let Some(count) = l.stroke.dab_count()
+        && let Some(recorder) = app.latency.as_mut()
+    {
+        recorder.record_brush_dab_count(count);
     }
     let LiveStroke { stroke, doc, key, damage, .. } = l;
     let before = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone());

@@ -50,6 +50,7 @@ struct Active {
     input_completed: bool,
     input_completion_allowed: bool,
     test_delay_applied: bool,
+    brush_dab_count: Option<usize>,
 }
 
 impl Recorder {
@@ -84,7 +85,7 @@ impl Recorder {
             return Err("latency recorder busy, full, or duplicate id");
         }
         state.records.push(json!({"id":id,"action":action,"accepted_ns":null,"completed_ns":null,
-            "duration_ns":null,"endpoint":"accepted-input-frame-gpu-work-complete","input_samples":[]}));
+            "duration_ns":null,"dab_count":null,"endpoint":"accepted-input-frame-gpu-work-complete","input_samples":[]}));
         self.active = Some(Active {
             id: id.into(),
             action: action.into(),
@@ -93,6 +94,7 @@ impl Recorder {
             input_completed: false,
             input_completion_allowed: action != "blend",
             test_delay_applied: false,
+            brush_dab_count: None,
         });
         self.queued.clear();
         Ok(())
@@ -142,6 +144,12 @@ impl Recorder {
         }
     }
 
+    pub(crate) fn record_brush_dab_count(&mut self, count: usize) {
+        if let Some(active) = self.active.as_mut().filter(|active| active.action == "brush") {
+            active.brush_dab_count = Some(count);
+        }
+    }
+
     /// Stamp events after the OS/egui host has placed them in this frame's input queue.
     pub(crate) fn accept_events(&mut self, events: &[egui::Event]) {
         if self.active.as_ref().is_none_or(|active| matches!(active.action.as_str(), "open" | "save")) {
@@ -169,6 +177,7 @@ impl Recorder {
     pub(crate) fn frame_callback(&mut self, full_composite_complete: bool) -> Option<Box<dyn FnOnce() + Send>> {
         let active = self.active.as_mut()?;
         let id = active.id.clone();
+        let brush_dab_count = active.brush_dab_count;
         let accepted = active.accepted?;
         let queued = std::mem::take(&mut self.queued);
         let epoch = self.epoch;
@@ -213,6 +222,7 @@ impl Recorder {
                 record["accepted_ns"] = json!(accepted);
                 record["completed_ns"] = json!(end);
                 record["duration_ns"] = json!(end.saturating_sub(accepted));
+                record["dab_count"] = json!(brush_dab_count);
                 let result = record.clone();
                 state.waiters.retain(|(wait_id, reply)| {
                     if *wait_id == id {
