@@ -84,8 +84,10 @@ impl Recorder {
         if self.active.is_some() || state.records.len() >= 4096 || state.records.iter().any(|r| r["id"] == id) {
             return Err("latency recorder busy, full, or duplicate id");
         }
+        let frame_capture_requested = action == "brush" && std::env::var("PHOTOCRAFT_LATENCY_FRAME_CAPTURE").as_deref() == Ok("1");
         state.records.push(json!({"id":id,"action":action,"accepted_ns":null,"completed_ns":null,
-            "duration_ns":null,"dab_count":null,"endpoint":"accepted-input-frame-gpu-work-complete","input_samples":[]}));
+            "duration_ns":null,"dab_count":null,"frame_pixel_hash":null,"frame_capture_requested":frame_capture_requested,
+            "endpoint":"accepted-input-frame-gpu-work-complete","input_samples":[]}));
         self.active = Some(Active {
             id: id.into(),
             action: action.into(),
@@ -148,6 +150,19 @@ impl Recorder {
         if let Some(active) = self.active.as_mut().filter(|active| active.action == "brush") {
             active.brush_dab_count = Some(count);
         }
+    }
+
+    fn frame_capture_id(&self) -> Option<String> {
+        let active = self.active.as_ref().filter(|active| active.action == "brush")?;
+        let capture_requested = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .records
+            .iter()
+            .find(|record| record["id"] == active.id)
+            .is_some_and(|record| record["frame_capture_requested"].as_bool() == Some(true));
+        (capture_requested && self.queued.iter().any(|(kind, _)| kind == "up")).then(|| active.id.clone())
     }
 
     /// Stamp events after the OS/egui host has placed them in this frame's input queue.
@@ -264,7 +279,28 @@ pub(crate) fn frame(app: &mut crate::PhotocraftApp, ui: &egui::Ui, frame: &efram
     // Do not consume the queued sample until there is a GPU queue to attach its completion
     // fence to. This also makes the recorder inert when PhotoCraft is running through its CPU
     // fallback path.
+    let capture_id = recorder.frame_capture_id();
     let Some(done) = recorder.frame_callback(full_composite_complete) else { return };
+    if let Some(id) = capture_id {
+        let state = recorder.state.clone();
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
+            let hash = frame_crop_hash(&image);
+            let mut state = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(record) = state.records.iter_mut().find(|record| record["id"] == id) else { return };
+            record["frame_pixel_hash"] = json!(hash);
+            if !record["completed_ns"].is_null() {
+                let result = record.clone();
+                state.waiters.retain(|(wait_id, reply)| {
+                    if *wait_id == id {
+                        let _ = reply.send(json!({"ok":true,"result":result}));
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+        })));
+    }
     type Work = Arc<AtomicBool>;
     static POLLER: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
     let device = render.device.clone();
@@ -283,6 +319,23 @@ pub(crate) fn frame(app: &mut crate::PhotocraftApp, ui: &egui::Ui, frame: &efram
         tx
     });
     ui.painter().add(egui_wgpu::Callback::new_paint_callback(ui.max_rect(), Fence { done: Mutex::new(Some(done)), poller: poller.clone() }));
+}
+
+/// FNV-1a over the centre crop used by the journey's pixel proof, in RGB order.
+fn frame_crop_hash(image: &egui::ColorImage) -> String {
+    let [width, height] = image.size;
+    let (x0, x1) = (width * 476 / 1600, width * 836 / 1600);
+    let (y0, y1) = (height * 354 / 1000, height * 714 / 1000);
+    let mut hash = 0xcbf29ce484222325u64;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            for byte in image.pixels[y * width + x].to_array()[..3].iter().copied() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+        }
+    }
+    format!("{hash:016x}")
 }
 
 #[cfg(target_arch = "wasm32")]
