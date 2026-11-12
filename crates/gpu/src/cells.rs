@@ -119,16 +119,20 @@ impl Compositor {
         if chunks.is_empty() {
             return;
         }
+        let trace = std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some();
         // Chunks may hold different checkpoints: bind from the lowest one any of them resumes at.
         let first_pass = checkpoint
             .and_then(|_| chunks.iter().map(|c| self.prefix.restore_point(*c).map(|r| r.pass_end)).try_fold(usize::MAX, |m, p| Some(m.min(p?))))
             .unwrap_or(0);
+        let bind_start = std::time::Instant::now();
         let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, stats);
+        if trace { eprintln!("composite trace bind-cell {cell:?}: {:.3} ms", bind_start.elapsed().as_secs_f64() * 1000.0); }
         // A page couldn't be created: draw nothing with the pages missing (the caller ends the refresh).
         if self.layer_alloc.is_some() {
             return;
         }
 
+        let setup_start = std::time::Instant::now();
         // Chunk pool.
         while self.pool.len() < plan.slots as usize {
             let t = device.create_texture(&wgpu::TextureDescriptor {
@@ -207,7 +211,9 @@ impl Compositor {
             bg1.push(Some(texture_group(device, &self.kit.bgl1, &[slot(p.a), slot(p.b), tv, mv, lv, slot(p.c), map, pat])));
         }
 
+        if trace { eprintln!("composite trace chunk-setup {cell:?}: {:.3} ms", setup_start.elapsed().as_secs_f64() * 1000.0); }
         for (ci, c) in chunks.iter().enumerate() {
+            let chunk_start = std::time::Instant::now();
             let mut resume = 0;
             if let Some(cp) = checkpoint.and_then(|_| self.prefix.restore_point(*c))
                 && let Some((dst, _)) = self.pool.get(cp.slot as usize)
@@ -329,6 +335,7 @@ impl Compositor {
             }
             let (t, v) = &self.pool[plan.root as usize];
             sink(encoder, ChunkOut { rect: *c, texture: t, view: v });
+            if trace { eprintln!("composite trace draw-chunk {cell:?}/{ci}: {:.3} ms", chunk_start.elapsed().as_secs_f64() * 1000.0); }
         }
     }
 
@@ -346,6 +353,10 @@ impl Compositor {
         region: Rect,
         stats: &mut Stats,
     ) -> Option<(ResKey, [i32; 4])> {
+        let trace = std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some();
+        let trace_start = std::time::Instant::now();
+        let mut convert_ns = 0u128;
+        let mut upload_ns = 0u128;
         // An earlier page of this cell didn't fit: the refresh ends after the cell anyway.
         if region.is_empty() || self.layer_alloc.is_some() {
             return None;
@@ -434,17 +445,24 @@ impl Compositor {
                 }
                 if !missing.is_empty() {
                     let bytes = convert_tile(surface, None, kind, TileCoord::new(0, 0));
+                    let t = std::time::Instant::now();
                     self.staged += put_tiles(device, queue, encoder, &r, &missing, &bytes);
+                    upload_ns += t.elapsed().as_nanos();
                 }
                 let staged = &mut self.staged;
+                let t = std::time::Instant::now();
+                let upload_before = upload_ns;
                 convert_tiles(surface, present, kind, |t, cs, bytes| {
+                    let u = std::time::Instant::now();
                     *staged += put_tiles(device, queue, encoder, &r, cs, bytes);
+                    upload_ns += u.elapsed().as_nanos();
                     for &c in cs {
                         stats.tiles_uploaded += 1;
                         stats.bytes_uploaded += bytes.len();
                         r.tiles.insert(c, t.clone());
                     }
                 });
+                convert_ns += t.elapsed().as_nanos().saturating_sub(upload_ns - upload_before);
             }
             // Tiles the donor held that this surface doesn't, or holds differently, are fixed up
             // by the pass over the region below.
@@ -478,17 +496,27 @@ impl Compositor {
             } else {
                 vec![0u8; (TILE_SIZE * TILE_SIZE) as usize * kind.bytes_per_pixel()]
             };
+            let t = std::time::Instant::now();
             self.staged += put_tiles(device, queue, encoder, r, &gone, &bytes);
+            upload_ns += t.elapsed().as_nanos();
         }
         let staged = &mut self.staged;
+        let t = std::time::Instant::now();
+        let upload_before = upload_ns;
         convert_tiles(surface, changed, kind, |t, cs, bytes| {
+            let u = std::time::Instant::now();
             *staged += put_tiles(device, queue, encoder, r, cs, bytes);
+            upload_ns += u.elapsed().as_nanos();
             for &c in cs {
                 stats.tiles_uploaded += 1;
                 stats.bytes_uploaded += bytes.len();
                 r.tiles.insert(c, t.clone());
             }
         });
+        convert_ns += t.elapsed().as_nanos().saturating_sub(upload_ns - upload_before);
+        if trace {
+            eprintln!("composite trace tile-sync layer={:?} role={:?}: {:.3} ms total, {:.3} ms conversion, {:.3} ms upload calls", key.0, key.1, trace_start.elapsed().as_secs_f64() * 1000.0, convert_ns as f64 / 1e6, upload_ns as f64 / 1e6);
+        }
         Some((key, [region.x0, region.y0, region.width() as i32, region.height() as i32]))
     }
 

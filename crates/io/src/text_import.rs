@@ -9,16 +9,23 @@ use photocraft_doc::{Document, Layer, LayerContent, TextLayer};
 pub(crate) const MAX_RENDER_PIXELS: u64 = 64 * 1024 * 1024;
 
 /// Renders `t` from its model unless its ink would exceed [`MAX_RENDER_PIXELS`].
-fn render_bounded(eng: &mut photocraft_text::TextEngine, t: &mut TextLayer, dpi: f32, format: photocraft_color::PixelFormat) {
+fn render_bounded(eng: &mut photocraft_text::TextEngine, t: &mut TextLayer, dpi: f32, format: photocraft_color::PixelFormat, name: &str) {
+    let trace = std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some();
+    let start = std::time::Instant::now();
+    let layout_start = std::time::Instant::now();
     let layout = eng.layout(t, dpi);
+    let layout_ns = layout_start.elapsed().as_nanos();
     let warp = photocraft_text::render::layout_deform(&layout, t);
     let ink = photocraft_text::render::ink_rect_warped(&layout, &t.transform, warp.as_ref());
     if u64::from(ink.width()).saturating_mul(u64::from(ink.height())) > MAX_RENDER_PIXELS {
         t.cache = Some(photocraft_raster::Surface::new(photocraft_color::PixelFormat { alpha: true, ..format }));
+        if trace { eprintln!("composite trace type-import layer={name:?}: {:.3} ms shaping/layout, oversized raster skipped", layout_ns as f64 / 1e6); }
         return;
     }
+    let raster_start = std::time::Instant::now();
     let r = photocraft_text::render::rasterize_warped(&layout, &t.transform, format, t.antialias, warp.as_ref());
     t.cache = Some(r.surface);
+    if trace { eprintln!("composite trace type-import layer={name:?}: {:.3} ms shaping/layout, {:.3} ms raster, {:.3} ms total", layout_ns as f64 / 1e6, raster_start.elapsed().as_secs_f64() * 1000.0, start.elapsed().as_secs_f64() * 1000.0); }
 }
 
 /// Prepares the type layers of a document that was just imported:
@@ -64,7 +71,9 @@ pub(crate) fn prepare(doc: &mut Document, txt2: Option<&photocraft_text::engine_
                     }
                     photocraft_text::psd::refine_legacy_point_origin(t, dpi, eng, txt2);
                     if t.cache.is_none() {
-                        render_bounded(eng, t, dpi, format);
+                        render_bounded(eng, t, dpi, format, &l.name);
+                    } else if std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some() {
+                        eprintln!("composite trace type-import layer={:?}: cached PSD pixels, no shaping/raster", l.name);
                     }
                 }
                 LayerContent::Group(g) => visit(&mut g.children, eng, dpi, format, txt2),

@@ -201,6 +201,8 @@ pub(crate) fn submit_batch(
     let prev = last.replace(queue.submit([done.finish()]));
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(prev) = prev {
+        let trace = std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some();
+        let wait_start = std::time::Instant::now();
         match health {
             Some(h) => {
                 h.wait(device, Some(prev));
@@ -209,6 +211,7 @@ pub(crate) fn submit_batch(
                 let _ = device.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: None });
             }
         }
+        if trace { eprintln!("composite trace submit sync-wait: {:.3} ms", wait_start.elapsed().as_secs_f64() * 1000.0); }
     }
     #[cfg(target_arch = "wasm32")]
     let _ = (prev, health);
