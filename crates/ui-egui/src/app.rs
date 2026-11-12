@@ -297,9 +297,6 @@ impl eframe::App for PhotocraftApp {
             self.ui.status_error = true;
         }
         self.ui_frame(ui, frame);
-        if self.latency.is_some() {
-            latency::frame(self, ui, frame);
-        }
         self.finish_type_reset_pass(ui.ctx());
     }
 }
