@@ -47,6 +47,7 @@ struct Active {
     action: String,
     accepted: Option<u64>,
     command_completed: bool,
+    input_completed: bool,
     input_completion_allowed: bool,
     test_delay_applied: bool,
 }
@@ -89,6 +90,7 @@ impl Recorder {
             action: action.into(),
             accepted: None,
             command_completed: false,
+            input_completed: false,
             input_completion_allowed: action != "blend",
             test_delay_applied: false,
         });
@@ -164,11 +166,8 @@ impl Recorder {
     }
 
     /// Called only after a visible UI pass. The callback is registered on that frame's GPU queue.
-    pub(crate) fn frame_callback(&mut self) -> Option<Box<dyn FnOnce() + Send>> {
-        let active = self.active.as_ref()?;
-        if self.queued.is_empty() {
-            return None;
-        }
+    pub(crate) fn frame_callback(&mut self, full_composite_complete: bool) -> Option<Box<dyn FnOnce() + Send>> {
+        let active = self.active.as_mut()?;
         let id = active.id.clone();
         let accepted = active.accepted?;
         let queued = std::mem::take(&mut self.queued);
@@ -176,11 +175,25 @@ impl Recorder {
         let state = self.state.clone();
         let release = queued.iter().any(|(kind, _)| kind == "up");
         let view_step = queued.iter().any(|(kind, _)| kind == "view");
+        let input_completed_now = release && (active.action != "blend" || active.input_completion_allowed);
+        if input_completed_now {
+            active.input_completed = true;
+        }
+        let input_completed = active.input_completed;
+        let pending_completion = match active.action.as_str() {
+            "open" => active.command_completed,
+            "visibility" | "blend" => input_completed,
+            _ => false,
+        };
+        if queued.is_empty() && !pending_completion {
+            return None;
+        }
         let finish = match active.action.as_str() {
-            "brush" | "visibility" | "move" | "pan" => release,
-            "blend" => release && active.input_completion_allowed,
+            "brush" | "move" | "pan" => release,
+            "visibility" | "blend" => input_completed && full_composite_complete,
             "zoom" => view_step,
-            "open" | "save" => active.command_completed,
+            "open" => active.command_completed && full_composite_complete,
+            "save" => active.command_completed,
             _ => false,
         };
         if finish {
@@ -232,10 +245,16 @@ pub(crate) fn frame(app: &mut crate::PhotocraftApp, ui: &egui::Ui, frame: &efram
     }
     let Some(recorder) = app.latency.as_mut() else { return };
     let Some(render) = frame.wgpu_render_state() else { return };
+    let full_composite_complete = app.session.active().is_some_and(|st| {
+        let pixels = u64::from(st.doc.size.width).saturating_mul(u64::from(st.doc.size.height));
+        let refresh = app.perf.stage.refresh;
+        let full_refresh = matches!(refresh, "full" | "gpu-full" | "rect" | "gpu-rect" | "background");
+        full_refresh && pixels > 0 && app.perf.stage.refresh_px >= pixels && !app.redraws.contains_key(&st.doc.id)
+    });
     // Do not consume the queued sample until there is a GPU queue to attach its completion
     // fence to. This also makes the recorder inert when PhotoCraft is running through its CPU
     // fallback path.
-    let Some(done) = recorder.frame_callback() else { return };
+    let Some(done) = recorder.frame_callback(full_composite_complete) else { return };
     type Work = Arc<AtomicBool>;
     static POLLER: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
     let device = render.device.clone();
@@ -320,7 +339,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         reader.wait(&json!({"id":"stroke-1"}), tx).unwrap();
         assert!(rx.try_recv().is_err());
-        let done = r.frame_callback().unwrap();
+        let done = r.frame_callback(false).unwrap();
         assert!(rx.try_recv().is_err());
         done();
         assert!(rx.try_recv().is_err(), "brush remains armed until release");
@@ -330,7 +349,7 @@ mod tests {
             pressed: false,
             modifiers: egui::Modifiers::NONE,
         }]);
-        r.frame_callback().unwrap()();
+        r.frame_callback(false).unwrap()();
         let reply = rx.recv().unwrap();
         assert!(reply["result"]["duration_ns"].as_u64().unwrap() > 0);
         assert_eq!(reply["result"]["input_samples"].as_array().unwrap().len(), 2);
@@ -346,7 +365,7 @@ mod tests {
             pressed: true,
             modifiers: egui::Modifiers::NONE,
         }]);
-        let down = r.frame_callback().unwrap();
+        let down = r.frame_callback(false).unwrap();
         down();
         assert!(r.active.is_some(), "a click begins on press and finishes on release");
         r.accept_events(&[egui::Event::PointerButton {
@@ -355,7 +374,9 @@ mod tests {
             pressed: false,
             modifiers: egui::Modifiers::NONE,
         }]);
-        r.frame_callback().unwrap()();
+        r.frame_callback(false).unwrap()();
+        assert!(r.active.is_some(), "the layer composite has not completed yet");
+        r.frame_callback(true).unwrap()();
         assert!(r.active.is_none());
 
         r.arm(&json!({"id":"open-1","action":"open"})).unwrap();
@@ -363,10 +384,12 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         reader.wait(&json!({"id":"open-1"}), tx).unwrap();
         r.accept_command("open");
-        r.frame_callback().unwrap()();
+        r.frame_callback(false).unwrap()();
         assert!(rx.try_recv().is_err(), "dispatch acceptance is not document completion");
         r.complete_command("open");
-        r.frame_callback().unwrap()();
+        r.frame_callback(false).unwrap()();
+        assert!(rx.try_recv().is_err(), "opening the document alone is not its full composite");
+        r.frame_callback(true).unwrap()();
         assert!(rx.recv().unwrap()["result"]["duration_ns"].as_u64().unwrap() > 0);
     }
 
@@ -378,11 +401,13 @@ mod tests {
             |pressed| egui::Event::PointerButton { pos: egui::pos2(8.0, 8.0), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
         r.set_input_completion_allowed(false);
         r.accept_events(&[click(true), click(false)]);
-        r.frame_callback().unwrap()();
+        r.frame_callback(false).unwrap()();
         assert!(r.active.is_some(), "opening the blend list does not finish the mode change");
         r.set_input_completion_allowed(true);
         r.accept_events(&[click(true), click(false)]);
-        r.frame_callback().unwrap()();
+        r.frame_callback(false).unwrap()();
+        assert!(r.active.is_some(), "the selected mode has not reached a full composite yet");
+        r.frame_callback(true).unwrap()();
         assert!(r.active.is_none());
     }
 

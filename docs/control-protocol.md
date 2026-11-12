@@ -786,15 +786,17 @@ Actions accepted are brush, visibility, blend, move, zoom, pan, open and save. P
 are move, down and up; wheel events use kind:"wheel" with deltaX and deltaY. Use screen points
 as reported by ui.inspect.
 
-Pointer clocks start in raw_input_hook after the app has accepted an input event. Brush, layer
-visibility, blend, move and pan gestures finish on release; zoom finishes on its wheel or pinch
-event. Records retain a sample for each accepted pointer or view event, each ending at the first
-GPU-complete frame that consumed that event. Open and Save clocks start when the corresponding
-control request is dispatched on the UI thread and finish after the document import or save job
-completes, at the first GPU-complete frame afterward. The endpoint confirms GPU work completion
-for that frame; it is not a scanout or photon timestamp. ui.latency.wait reads an already-created
-record on the control socket thread, without a UI dispatch or repaint. With the environment
-variable unset, the recorder, its worker, and its frame callback are absent.
+Pointer clocks start in raw_input_hook after the app has accepted an input event. Brush, move and
+pan gestures finish on release; zoom finishes on its wheel or pinch event. Records retain a sample
+for each accepted pointer or view event, each ending at the first GPU-complete frame that consumed
+that event. Visibility and blend actions also finish on release, but the action-level result waits
+for a completed full-document canvas refresh for the active document. Open starts when its control
+request is dispatched on the UI thread and ends after import and the first completed full-document
+composite. Save starts on dispatch and ends after its save job completes and a GPU-complete frame.
+The endpoint confirms GPU work completion for that frame; it is not a scanout or photon timestamp.
+ui.latency.wait reads an already-created record on the control socket thread, without a UI dispatch
+or repaint. With the environment variable unset, the recorder, its worker, and its frame callback
+are absent.
 
 ### Select the layer under the pointer
 
