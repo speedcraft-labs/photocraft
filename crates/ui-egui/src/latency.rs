@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, mpsc::Sender};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 struct State {
@@ -48,6 +48,7 @@ struct Active {
     accepted: Option<u64>,
     command_completed: bool,
     input_completion_allowed: bool,
+    test_delay_applied: bool,
 }
 
 impl Recorder {
@@ -83,10 +84,36 @@ impl Recorder {
         }
         state.records.push(json!({"id":id,"action":action,"accepted_ns":null,"completed_ns":null,
             "duration_ns":null,"endpoint":"accepted-input-frame-gpu-work-complete","input_samples":[]}));
-        self.active =
-            Some(Active { id: id.into(), action: action.into(), accepted: None, command_completed: false, input_completion_allowed: action != "blend" });
+        self.active = Some(Active {
+            id: id.into(),
+            action: action.into(),
+            accepted: None,
+            command_completed: false,
+            input_completion_allowed: action != "blend",
+            test_delay_applied: false,
+        });
         self.queued.clear();
         Ok(())
+    }
+
+    /// Optional physical slowdown dose for the calibration check. The accepted-input timestamp
+    /// is recorded before this delay; the production path is inert unless both test variables are
+    /// explicitly set in a recorder-enabled build.
+    pub(crate) fn test_delay_after_accept(&mut self) -> Option<Duration> {
+        let active = self.active.as_mut()?;
+        if active.test_delay_applied || active.accepted.is_none() {
+            return None;
+        }
+        let requested = std::env::var("PHOTOCRAFT_LATENCY_SLOW_ACTION").ok()?;
+        if !test_delay_matches(&active.action, &active.id, &requested) {
+            return None;
+        }
+        let millis = std::env::var("PHOTOCRAFT_LATENCY_SLOW_MS").ok()?.parse::<u64>().ok()?;
+        if millis == 0 {
+            return None;
+        }
+        active.test_delay_applied = true;
+        Some(Duration::from_millis(millis))
     }
 
     /// Stamp an app.open/app.save control request on the UI thread after dispatch accepts it.
@@ -185,6 +212,10 @@ impl Recorder {
             }
         }))
     }
+}
+
+fn test_delay_matches(action: &str, id: &str, requested: &str) -> bool {
+    requested == action || id.contains(requested)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -353,5 +384,11 @@ mod tests {
         r.accept_events(&[click(true), click(false)]);
         r.frame_callback().unwrap()();
         assert!(r.active.is_none());
+    }
+
+    #[test]
+    fn slowdown_check_can_target_one_brush_size_label() {
+        assert!(test_delay_matches("brush", "aa-0-slow-brush-30px-1", "brush-30px"));
+        assert!(!test_delay_matches("brush", "aa-0-fast-brush-500px-1", "brush-30px"));
     }
 }

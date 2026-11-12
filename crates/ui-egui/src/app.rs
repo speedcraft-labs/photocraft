@@ -269,6 +269,9 @@ impl eframe::App for PhotocraftApp {
         self.inject_synthetic(ctx, raw_input);
         if let Some(recorder) = &mut self.latency {
             recorder.accept_events(&raw_input.events);
+            if let Some(delay) = recorder.test_delay_after_accept() {
+                std::thread::sleep(delay);
+            }
         }
         // After the control channel's own events (`ui.type`) join the OS's, before any widget.
         widgets::cap_text_events(&mut raw_input.events);
