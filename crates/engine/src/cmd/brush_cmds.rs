@@ -620,6 +620,11 @@ impl LiveCommit {
 }
 
 impl LiveStroke {
+    /// Number of primary dabs already rasterized, including the finishing tail.
+    pub fn dab_count(&self) -> usize {
+        self.renderer.dab_count() + self.renderer.tail_dabs().len()
+    }
+
     /// Start from `paint.stroke` params; their `points` are rendered.
     pub fn begin(s: &Session, p: &Value) -> Result<Self> {
         Self::begin_with(s, "paint.stroke", p)
