@@ -182,6 +182,7 @@ fn shell_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequ
         }
         "ui.gpu.simulateLoss" => simulate_gpu_loss(app, ctx, p),
         "ui.focus" => {
+            // Explicit request: activate the app and take keyboard focus.
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
