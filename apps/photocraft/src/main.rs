@@ -619,7 +619,7 @@ fn main() -> eframe::Result {
                 }
             });
             if let Some((listener, token, _)) = control {
-                let rx = control_server::start(listener, token, cc.egui_ctx.clone());
+                let rx = control_server::start(listener, token, cc.egui_ctx.clone(), app.latency_reader());
                 app = app.with_control(rx);
             }
             #[cfg(target_os = "macos")]
