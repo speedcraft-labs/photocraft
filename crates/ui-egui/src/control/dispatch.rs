@@ -224,9 +224,9 @@ fn screenshot(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcom
         Ok(parsed) => parsed,
         Err(e) => return err(e),
     };
-    // Occluded windows don't render on macOS, so the screenshot would never arrive: raise first.
+    // Occluded windows don't render on macOS, so the screenshot would never arrive: raise without taking focus.
     if focus.unwrap_or(true) {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        app.raise_for_control(ctx);
     }
     // The capture itself is admitted by `PhotocraftApp::drain_control` (budget and
     // geometry) and issued from a later `App::ui` pass once open/close animations
