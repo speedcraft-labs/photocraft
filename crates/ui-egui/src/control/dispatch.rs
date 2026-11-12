@@ -1077,6 +1077,7 @@ fn input_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequ
     let p = &req.params;
     Some(match req.method.as_str() {
         "ui.pointer" => pointer(app, ctx, p),
+        "ui.latency.input" => latency_input(app, ctx, p),
         "ui.click" | "ui.move" => click(app, ctx, p, req.method == "ui.click"),
         "ui.key" => key(app, ctx, p),
         "ui.type" => {
@@ -1087,6 +1088,59 @@ fn input_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequ
         }
         _ => return None,
     })
+}
+
+/// Queue desktop pointer events for the latency recorder. They re-enter egui through the app's
+/// ordinary synthetic-input queue and then follow the same widgets/canvas/tool/brush path as OS
+/// pointer events; this deliberately does not call the tool handler directly.
+fn latency_input(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
+    if app.latency.is_none() {
+        return err("latency recorder disabled");
+    }
+    let Some(events) = p.get("events").and_then(Value::as_array) else {
+        return err("events must be an array");
+    };
+    if events.is_empty() || events.len() > 2048 {
+        return err("events must contain between 1 and 2048 entries");
+    }
+    if !app.synthetic.is_empty() || app.synthetic_batch.is_some() {
+        return err("synthetic input queue is busy");
+    }
+    let mut parsed = Vec::with_capacity(events.len());
+    for event in events {
+        let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
+        let x = event.get("x").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0);
+        let y = event.get("y").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0);
+        let pos = egui::pos2(x as f32, y as f32);
+        let value = match kind {
+            "move" => egui::Event::PointerMoved(pos),
+            "down" | "up" => {
+                let button = match event.get("button").and_then(Value::as_str).unwrap_or("left") {
+                    "left" => egui::PointerButton::Primary,
+                    "right" => egui::PointerButton::Secondary,
+                    "middle" => egui::PointerButton::Middle,
+                    _ => return err("button must be left, middle or right"),
+                };
+                egui::Event::PointerButton { pos, button, pressed: kind == "down", modifiers: egui::Modifiers::NONE }
+            }
+            "wheel" => {
+                let Some(dy) = event.get("deltaY").and_then(Value::as_f64).filter(|v| v.is_finite()) else { return err("deltaY must be finite") };
+                let dx = event.get("deltaX").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0);
+                egui::Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(dx as f32, dy as f32),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                }
+            }
+            _ => return err("event kind must be move, down, up or wheel"),
+        };
+        parsed.push(value);
+    }
+    app.synthetic.extend(parsed);
+    ctx.request_repaint();
+    Outcome::AfterInput
 }
 
 fn click(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value, click: bool) -> Outcome {

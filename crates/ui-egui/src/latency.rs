@@ -223,7 +223,7 @@ impl eframe::egui_wgpu::CallbackTrait for Fence {
     }
     fn paint(
         &self,
-        _info: eframe::egui_wgpu::PaintCallbackInfo,
+        _info: eframe::egui::epaint::PaintCallbackInfo,
         _pass: &mut eframe::egui_wgpu::wgpu::RenderPass<'static>,
         _resources: &eframe::egui_wgpu::CallbackResources,
     ) {

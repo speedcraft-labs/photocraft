@@ -33,6 +33,7 @@ pub fn start(listener: TcpListener, token: String, ctx: egui::Context, latency: 
             let tx = tx.clone();
             let ctx = ctx.clone();
             let token = Arc::clone(&token);
+            let latency = latency.clone();
             std::thread::spawn(move || {
                 let _permit = permit;
                 serve(stream, &token, tx, ctx, latency.clone());
