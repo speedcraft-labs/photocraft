@@ -364,6 +364,9 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
         }
     }
     close_after_saves(app, ctx);
+    if let Some(recorder) = app.latency.as_mut() {
+        recorder.complete_command("save");
+    }
 }
 
 /// Forget saves whose job ended and whose worker has returned; repeat a held window close once
@@ -537,6 +540,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             }
         }
         end_batch(app);
+        if let Some(recorder) = app.latency.as_mut() {
+            recorder.complete_command("open");
+        }
         return;
     }
     match e.outcome {
