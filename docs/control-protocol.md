@@ -786,13 +786,15 @@ Actions accepted are brush, visibility, blend, move, zoom, pan, open and save. P
 are move, down and up; wheel events use kind:"wheel" with deltaX and deltaY. Use screen points
 as reported by ui.inspect.
 
-The recorder starts when raw_input_hook receives an event from the app input queue. It ends
-from a callback on the egui-wgpu command buffer for the frame that consumed the event. Brush
-records contain a latency sample for each received pointer event and finish on release. The
-endpoint confirms GPU work completion for that frame; it is not a scanout or photon timestamp.
-ui.latency.wait reads an already-created record on the control socket thread, without a UI
-dispatch or repaint. With the environment variable unset, the recorder, its worker, and its
-frame callback are absent.
+Pointer clocks start in raw_input_hook after the app has accepted an input event. Brush, layer
+visibility, blend, move and pan gestures finish on release; zoom finishes on its wheel or pinch
+event. Records retain a sample for each accepted pointer or view event, each ending at the first
+GPU-complete frame that consumed that event. Open and Save clocks start when the corresponding
+control request is dispatched on the UI thread and finish after the document import or save job
+completes, at the first GPU-complete frame afterward. The endpoint confirms GPU work completion
+for that frame; it is not a scanout or photon timestamp. ui.latency.wait reads an already-created
+record on the control socket thread, without a UI dispatch or repaint. With the environment
+variable unset, the recorder, its worker, and its frame callback are absent.
 
 ### Select the layer under the pointer
 

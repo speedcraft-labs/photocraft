@@ -1,6 +1,7 @@
 //! Opt-in accepted-input to reflecting-frame completion recorder for desktop journeys.
-//! The clock starts in `raw_input_hook` after the host has accepted a real input event and ends
-//! from a completion callback on the command buffer for the frame that consumed that event.
+//! Pointer clocks start in `raw_input_hook` after the app has accepted an input event. Open/Save
+//! clocks start when their control request is dispatched on the UI thread. They end from a
+//! completion callback on the command buffer for the frame that consumed the final action.
 //! This is GPU-work completion, not display scanout.
 
 use serde_json::{Value, json};
@@ -45,6 +46,7 @@ struct Active {
     id: String,
     action: String,
     accepted: Option<u64>,
+    command_completed: bool,
 }
 
 impl Recorder {
@@ -80,14 +82,30 @@ impl Recorder {
         }
         state.records.push(json!({"id":id,"action":action,"accepted_ns":null,"completed_ns":null,
             "duration_ns":null,"endpoint":"accepted-input-frame-gpu-work-complete","input_samples":[]}));
-        self.active = Some(Active { id: id.into(), action: action.into(), accepted: None });
+        self.active = Some(Active { id: id.into(), action: action.into(), accepted: None, command_completed: false });
         self.queued.clear();
         Ok(())
     }
 
+    /// Stamp an app.open/app.save control request on the UI thread after dispatch accepts it.
+    pub(crate) fn accept_command(&mut self, action: &str) {
+        let at = ns(self.epoch);
+        let Some(active) = self.active.as_mut().filter(|active| active.action == action && active.accepted.is_none()) else { return };
+        active.accepted = Some(at);
+        self.queued.push(("command".into(), at));
+    }
+
+    /// Finish Open/Save only after PhotoCraft has applied the resulting document or written it.
+    pub(crate) fn complete_command(&mut self, action: &str) {
+        let at = ns(self.epoch);
+        let Some(active) = self.active.as_mut().filter(|active| active.action == action && active.accepted.is_some()) else { return };
+        active.command_completed = true;
+        self.queued.push(("command-complete".into(), at));
+    }
+
     /// Stamp events after the OS/egui host has placed them in this frame's input queue.
     pub(crate) fn accept_events(&mut self, events: &[egui::Event]) {
-        if self.active.is_none() {
+        if self.active.as_ref().is_none_or(|active| matches!(active.action.as_str(), "open" | "save")) {
             return;
         }
         for event in events {
@@ -120,7 +138,13 @@ impl Recorder {
         let epoch = self.epoch;
         let state = self.state.clone();
         let release = queued.iter().any(|(kind, _)| kind == "up");
-        let finish = active.action != "brush" || release;
+        let view_step = queued.iter().any(|(kind, _)| kind == "view");
+        let finish = match active.action.as_str() {
+            "brush" | "visibility" | "blend" | "move" | "pan" => release,
+            "zoom" => view_step,
+            "open" | "save" => active.command_completed,
+            _ => false,
+        };
         if finish {
             self.active = None;
         }
@@ -165,8 +189,11 @@ pub(crate) fn frame(app: &mut crate::PhotocraftApp, ui: &egui::Ui, frame: &efram
         return;
     }
     let Some(recorder) = app.latency.as_mut() else { return };
-    let Some(done) = recorder.frame_callback() else { return };
     let Some(render) = frame.wgpu_render_state() else { return };
+    // Do not consume the queued sample until there is a GPU queue to attach its completion
+    // fence to. This also makes the recorder inert when PhotoCraft is running through its CPU
+    // fallback path.
+    let Some(done) = recorder.frame_callback() else { return };
     type Work = Arc<AtomicBool>;
     static POLLER: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
     let device = render.device.clone();
@@ -265,5 +292,39 @@ mod tests {
         let reply = rx.recv().unwrap();
         assert!(reply["result"]["duration_ns"].as_u64().unwrap() > 0);
         assert_eq!(reply["result"]["input_samples"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn click_actions_wait_for_release_and_open_waits_for_completion() {
+        let mut r = Recorder { epoch: Instant::now(), state: Arc::new(Mutex::new(State::default())), active: None, queued: Vec::new() };
+        r.arm(&json!({"id":"toggle-1","action":"visibility"})).unwrap();
+        r.accept_events(&[egui::Event::PointerButton {
+            pos: egui::pos2(4.0, 4.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let down = r.frame_callback().unwrap();
+        down();
+        assert!(r.active.is_some(), "a click begins on press and finishes on release");
+        r.accept_events(&[egui::Event::PointerButton {
+            pos: egui::pos2(4.0, 4.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        r.frame_callback().unwrap()();
+        assert!(r.active.is_none());
+
+        r.arm(&json!({"id":"open-1","action":"open"})).unwrap();
+        let reader = r.reader();
+        let (tx, rx) = std::sync::mpsc::channel();
+        reader.wait(&json!({"id":"open-1"}), tx).unwrap();
+        r.accept_command("open");
+        r.frame_callback().unwrap()();
+        assert!(rx.try_recv().is_err(), "dispatch acceptance is not document completion");
+        r.complete_command("open");
+        r.frame_callback().unwrap()();
+        assert!(rx.recv().unwrap()["result"]["duration_ns"].as_u64().unwrap() > 0);
     }
 }

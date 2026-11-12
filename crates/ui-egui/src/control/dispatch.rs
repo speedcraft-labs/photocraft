@@ -1109,9 +1109,17 @@ fn latency_input(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Out
     let mut parsed = Vec::with_capacity(events.len());
     for event in events {
         let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
-        let x = event.get("x").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0);
-        let y = event.get("y").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0);
-        let pos = egui::pos2(x as f32, y as f32);
+        let pos = if matches!(kind, "move" | "down" | "up") {
+            let Some(x) = event.get("x").and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v as f32).filter(|v| v.is_finite()) else {
+                return err("pointer x must be a finite screen coordinate");
+            };
+            let Some(y) = event.get("y").and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v as f32).filter(|v| v.is_finite()) else {
+                return err("pointer y must be a finite screen coordinate");
+            };
+            egui::pos2(x, y)
+        } else {
+            egui::Pos2::ZERO
+        };
         let value = match kind {
             "move" => egui::Event::PointerMoved(pos),
             "down" | "up" => {
@@ -1443,17 +1451,36 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     let p = &req.params;
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
-            Some(path) => match p.get("approveHighMemory") {
-                None | Some(Value::Null) => app_open(app, path, false),
-                Some(Value::Bool(approved)) => app_open(app, path, *approved),
-                Some(_) => err("expected boolean for `approveHighMemory`"),
-            },
+            Some(path) => {
+                let approved = match p.get("approveHighMemory") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(approved)) => *approved,
+                    Some(_) => return Some(err("expected boolean for `approveHighMemory`")),
+                };
+                if let Some(recorder) = app.latency.as_mut() {
+                    recorder.accept_command("open");
+                }
+                let outcome = app_open(app, path, approved);
+                if let Some(recorder) = app.latency.as_mut() {
+                    recorder.complete_command("open");
+                }
+                outcome
+            }
             None => err("missing `path`"),
         },
         "app.save" => match crate::FormatChoices::from_params(p, "app.save") {
             Ok(choices) => {
                 let path = str_param(p, "path").map(str::to_string);
-                run_waiting(app, wait_param(p), move |app| app.save_automation_with(path, choices))
+                if let Some(recorder) = app.latency.as_mut() {
+                    recorder.accept_command("save");
+                }
+                let outcome = run_waiting(app, wait_param(p), move |app| app.save_automation_with(path, choices));
+                if matches!(&outcome, Outcome::Done(_))
+                    && let Some(recorder) = app.latency.as_mut()
+                {
+                    recorder.complete_command("save");
+                }
+                outcome
             }
             Err(e) => err(e),
         },
