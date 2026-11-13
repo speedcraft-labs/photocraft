@@ -240,6 +240,19 @@ pub(crate) fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: Te
         return out;
     }
     let fmt = surface.format();
+    if let (Some(t), TexKind::Rgba8) = (tile, kind)
+        && fmt.mode == photocraft_color::ColorMode::Rgb
+        && fmt.sample == SampleType::U8
+        && !fmt.alpha
+    {
+        let bytes = t.bytes();
+        let mut out = scratch::take_cap(bytes.len() / 3 * 4);
+        for rgb in bytes.chunks_exact(3) {
+            out.extend_from_slice(rgb);
+            out.push(255);
+        }
+        return out;
+    }
     if let (Some(t), TexKind::Rgba16F) = (tile, kind)
         && let Some(out) = rgb_gray16_to_f16(&fmt, &t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, &t.bytes()))
     {

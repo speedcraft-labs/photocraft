@@ -327,6 +327,27 @@ fn convert_tiles_converts_each_distinct_tile_once() {
     assert_eq!(batch_sizes, [CONVERT_BATCH, 5]);
 }
 
+/// RGB8 tiles have no alpha byte, so make RGBA8 texels directly while preserving the
+/// general per-pixel conversion's exact rounding for every possible channel value.
+#[test]
+fn rgb8_tiles_convert_to_rgba8_byte_for_byte() {
+    use photocraft_color::{ColorMode, PixelFormat};
+
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, false);
+    let mut surface = Surface::new(fmt);
+    let rect = Rect::new(0, 0, TILE_SIZE, TILE_SIZE);
+    let data: Vec<f32> = (0..(TILE_SIZE * TILE_SIZE) as usize).flat_map(|i| [i % 256, (i * 37) % 256, (i * 71) % 256].map(|v| v as f32 / 255.0)).collect();
+    surface.write_region(rect, &data);
+
+    let coord = TileCoord::new(0, 0);
+    let tile = surface.tile(coord).expect("written RGB8 tile");
+    let raw = surface.read_region(rect);
+    let expected: Vec<u8> =
+        raw.chunks_exact(fmt.channels()).flat_map(|px| photocraft_raster::to_rgba(&fmt, px).map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)).collect();
+    let actual = convert_tile(&surface, Some(tile), TexKind::Rgba8, coord);
+    assert_eq!(actual, expected);
+}
+
 /// The 16-bit and 32-bit float RGB/gray fast paths give exactly the general path's half
 /// floats (32-bit samples above 1 and below 0 included).
 #[test]
