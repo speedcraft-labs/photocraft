@@ -81,10 +81,11 @@ mod tests {
         };
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), services);
         let ctx = egui::Context::default();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| app.raise_for_control(ui.ctx()));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.raise_for_control(ui.ctx()));
 
         assert!(called.load(std::sync::atomic::Ordering::Relaxed));
         let focused = output.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|output| output.commands.contains(&egui::ViewportCommand::Focus));
         assert!(!focused, "control UI requests must not activate the app");
+        output.textures_delta.clear();
     }
 }
