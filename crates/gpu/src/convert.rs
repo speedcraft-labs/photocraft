@@ -63,7 +63,8 @@ pub(crate) fn put_tiles(device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mu
 /// Stage one bounded conversion batch, then copy each distinct tile to its coordinates. A single
 /// `Queue::write_texture` per tile made the CPU spend most of a large first composite preparing
 /// thousands of tiny uploads; one buffer write per conversion batch keeps the same texels and
-/// preserves copy order inside the cell encoder.
+/// preserves copy order inside the cell encoder. Narrow mask formats get zero-padded rows to meet
+/// the buffer-to-texture copy alignment requirement.
 pub(crate) fn put_tile_batch(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -71,15 +72,27 @@ pub(crate) fn put_tile_batch(
     r: &Resident,
     groups: &[(&[TileCoord], &[u8])],
 ) -> u64 {
-    let staged = groups.iter().map(|(_, bytes)| bytes.len()).sum::<usize>();
+    let tile_size = TILE_SIZE as usize;
+    let bpp = r.kind.bytes_per_pixel();
+    let row = tile_size * bpp;
+    let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+    let bytes_per_row = row.div_ceil(alignment) * alignment;
+    let tile_stride = bytes_per_row * tile_size;
+    let staged = groups.len() * tile_stride;
     if staged == 0 {
         return 0;
     }
-    let bpp = r.kind.bytes_per_pixel() as u32;
-    let row = TILE_SIZE as u32 * bpp;
     let mut data = Vec::with_capacity(staged);
     for (_, bytes) in groups {
-        data.extend_from_slice(bytes);
+        debug_assert_eq!(bytes.len(), row * tile_size);
+        if bytes_per_row == row {
+            data.extend_from_slice(bytes);
+        } else {
+            for source_row in bytes.chunks_exact(row) {
+                data.extend_from_slice(source_row);
+                data.resize(data.len() + bytes_per_row - row, 0);
+            }
+        }
     }
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("pc_tile_upload_batch"),
@@ -90,13 +103,13 @@ pub(crate) fn put_tile_batch(
     queue.write_buffer(&buffer, 0, &data);
     let extent = wgpu::Extent3d { width: TILE_SIZE as u32, height: TILE_SIZE as u32, depth_or_array_layers: 1 };
     let mut offset = 0;
-    for (coords, bytes) in groups {
+    for (coords, _) in groups {
         for c in *coords {
             let tr = c.rect();
             encoder.copy_buffer_to_texture(
                 wgpu::TexelCopyBufferInfo {
                     buffer: &buffer,
-                    layout: wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(row), rows_per_image: Some(TILE_SIZE as u32) },
+                    layout: wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(bytes_per_row as u32), rows_per_image: Some(TILE_SIZE as u32) },
                 },
                 wgpu::TexelCopyTextureInfo {
                     texture: &r.texture,
@@ -107,7 +120,7 @@ pub(crate) fn put_tile_batch(
                 extent,
             );
         }
-        offset += bytes.len() as u64;
+        offset += tile_stride as u64;
     }
     staged as u64
 }
