@@ -188,6 +188,9 @@ jobs:
       matrix:
         part: [unit, integration]
     env:
+      # Keep Windows rustc command lines below CreateProcess's limit: this workspace has enough
+      # dependencies that the default target path is repeated hundreds of times in --extern args.
+      CARGO_TARGET_DIR: 'D:\a\t'
       # No debuginfo on Windows: writing PDBs for ~200 test binaries cost 2.2 of ~21 build minutes.
       # A panic still names its file and line; only backtrace frames lose theirs (Linux keeps
       # line-tables-only, so a backtrace with lines is one OS away).
