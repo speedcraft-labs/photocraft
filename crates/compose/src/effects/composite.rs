@@ -246,11 +246,12 @@ pub(crate) fn composite_with_effects_prepared(
     let big = pass.big;
     let shape = pass.effect_shape(content);
     let rect = backdrop.rect;
+    let before = backdrop.clone();
     // Exterior effects are painted on a backdrop copy extended to `big`.
     let mut work = Buffer::transparent(big);
     for y in rect.y0.max(big.y0)..rect.y1.min(big.y1) {
         for x in rect.x0.max(big.x0)..rect.x1.min(big.x1) {
-            work.px[((y - big.y0) as usize) * pass.w + (x - big.x0) as usize] = backdrop.get(x, y);
+            work.px[((y - big.y0) as usize) * pass.w + (x - big.x0) as usize] = before.get(x, y);
         }
     }
     pass.paint_exterior(&mut work, &shape);
@@ -291,7 +292,7 @@ pub(crate) fn composite_with_effects_prepared(
     // them into the layer before its (text-gamma) composite left a type layer's lit top edges up
     // to 6/255 dark (psd-tools layer_effects Emboss: 7.8 → 5.7/255).
     pass.paint_bevel(&mut work, BevelPaint::Both, None);
-    pass.write_back(backdrop, &work);
+    pass.write_back(backdrop, &before, &work);
 }
 
 /// `true` where the effect shape covers a pixel enough for interior effects to paint.
@@ -453,32 +454,20 @@ impl<'a> EffectPass<'a> {
     /// and inner shadow.
     fn paint_interior(&self, lay: &mut Buffer, shape: &Map) {
         let (w, h, big, sb, anchor, patterns) = (self.w, self.h, self.big, self.sb, self.anchor, self.patterns);
-        if self.items.iter().any(|e| matches!(e, Effect::PatternOverlay { .. } | Effect::GradientOverlay { .. } | Effect::ColorOverlay { .. })) {
-            let full = Map { w, h, v: shape.v.iter().map(|a| if inside(*a) { 1.0 } else { 0.0 }).collect() };
-            for (_, e) in self.rev() {
-                if let Effect::PatternOverlay { common, name, id, scale, angle, link, phase } = e {
-                    paint_pattern(
-                        lay,
-                        &full,
-                        patterns,
-                        name,
-                        id,
-                        Placement::anchored(anchor, *link, *phase, *scale, *angle),
-                        big,
-                        common.blend,
-                        common.opacity,
-                    );
-                }
+        let full = Map { w, h, v: shape.v.iter().map(|a| if inside(*a) { 1.0 } else { 0.0 }).collect() };
+        for (_, e) in self.rev() {
+            if let Effect::PatternOverlay { common, name, id, scale, angle, link, phase } = e {
+                paint_pattern(lay, &full, patterns, name, id, Placement::anchored(anchor, *link, *phase, *scale, *angle), big, common.blend, common.opacity);
             }
-            for (_, e) in self.rev() {
-                if let Effect::GradientOverlay { common, gradient, .. } = e {
-                    paint_fx(lay, &full, &FxPaint::Gradient(gradient.clone()), sb, anchor, big, common.blend, common.opacity, patterns)
-                }
+        }
+        for (_, e) in self.rev() {
+            if let Effect::GradientOverlay { common, gradient, .. } = e {
+                paint_fx(lay, &full, &FxPaint::Gradient(gradient.clone()), sb, anchor, big, common.blend, common.opacity, patterns)
             }
-            for (_, e) in self.rev() {
-                if let Effect::ColorOverlay { common, color } = e {
-                    paint_color(lay, &full, rgb(color), common.blend, common.opacity);
-                }
+        }
+        for (_, e) in self.rev() {
+            if let Effect::ColorOverlay { common, color } = e {
+                paint_color(lay, &full, rgb(color), common.blend, common.opacity);
             }
         }
         for (i, e) in self.rev() {
@@ -675,16 +664,15 @@ impl<'a> EffectPass<'a> {
         share
     }
 
-    /// Writes the finished stack `work` into `backdrop` at layer opacity. Each original backdrop
-    /// pixel remains available until its own index is written, so this needs no snapshot.
-    fn write_back(&self, backdrop: &mut Buffer, work: &Buffer) {
+    /// Writes the finished stack `work` into `backdrop` (over `before`) at layer opacity.
+    fn write_back(&self, backdrop: &mut Buffer, before: &Buffer, work: &Buffer) {
         let (big, w) = (self.big, self.w);
         let rect = backdrop.rect;
         let op = self.layer.opacity;
         for y in rect.y0..rect.y1 {
             for x in rect.x0..rect.x1 {
                 let i = ((y - rect.y0) as usize) * rect.width() as usize + (x - rect.x0) as usize;
-                let a = backdrop.px[i];
+                let a = before.px[i];
                 let b = if x >= big.x0 && x < big.x1 && y >= big.y0 && y < big.y1 { work.px[((y - big.y0) as usize) * w + (x - big.x0) as usize] } else { a };
                 backdrop.px[i] = if self.layer.blend == BlendMode::Dissolve {
                     // Dissolve applies layer opacity to the completed interior/exterior effect
