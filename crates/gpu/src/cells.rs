@@ -12,6 +12,8 @@ const PATTERN_UPLOAD_BAND_BYTES: u64 = 4 << 20;
 /// Stage only larger refreshes, where a buffer write amortizes setup; live strokes often touch
 /// just one tile and stay on the direct upload path.
 const MIN_BATCH_UPLOAD_TILES: usize = CONVERT_BATCH / 2;
+/// RGB8 photo layers often arrive as cell-local groups just below the general staging threshold.
+const MIN_DIRECT_RGBA8_BATCH_UPLOAD_TILES: usize = 8;
 
 fn put_converted_batch<T>(
     device: &wgpu::Device,
@@ -22,7 +24,8 @@ fn put_converted_batch<T>(
     bytes: &[Vec<u8>],
 ) -> u64 {
     let tile_count = groups.iter().map(|(_, coords)| coords.len()).sum::<usize>();
-    if tile_count < MIN_BATCH_UPLOAD_TILES {
+    let min_batch = if matches!(r.kind, TexKind::Rgba8Direct) { MIN_DIRECT_RGBA8_BATCH_UPLOAD_TILES } else { MIN_BATCH_UPLOAD_TILES };
+    if tile_count < min_batch {
         groups.iter().zip(bytes).map(|((_, coords), bytes)| put_tiles(device, queue, encoder, r, coords, bytes)).sum()
     } else {
         let uploads: Vec<_> = groups.iter().zip(bytes).map(|((_, coords), bytes)| (coords.as_slice(), bytes.as_slice())).collect();
