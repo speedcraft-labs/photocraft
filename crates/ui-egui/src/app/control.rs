@@ -3,6 +3,8 @@ use super::{ControlRequest, PhotocraftApp, Receiver, gpu_canvas};
 impl PhotocraftApp {
     /// Make the UI pass run for a control request without stealing the user's keyboard focus.
     pub(crate) fn raise_for_control(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::viewport::WindowLevel::Normal));
         if let Some(raise) = self.services.raise_without_focus.as_mut() {
             raise();
         }

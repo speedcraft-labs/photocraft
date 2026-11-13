@@ -452,6 +452,11 @@ fn main() -> eframe::Result {
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
     let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
     let mut options = native_options(custom_titlebar, control_port.is_some());
+    // Keep an agent window behind normal application windows, even when eframe first shows it.
+    #[cfg(target_os = "macos")]
+    if control_port.is_some() {
+        options.viewport = options.viewport.with_window_level(egui::viewport::WindowLevel::AlwaysOnBottom);
+    }
     // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; open on X11 when that was chosen.
     #[cfg(target_os = "linux")]
     if session == linux_libs::DisplaySession::X11 {
