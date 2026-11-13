@@ -185,6 +185,8 @@ fn shell_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequ
             // Explicit request: activate the app and take keyboard focus.
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            #[cfg(target_os = "macos")]
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::viewport::WindowLevel::Normal));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.request_repaint();
             ok(Value::Null)
