@@ -1,6 +1,6 @@
 use super::batch::{batch_kernel, batch_op_words, op_words, submit_batch};
 use super::consts::{FLUSH_OPS, MAP32, STRIDE};
-use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tile_batch, put_tiles, words};
+use super::convert::{CONVERT_BATCH, convert_tile, convert_tiles, keep_overlap, put_tile_batch, put_tiles, words};
 use super::kit::{Bound, FrameRes, texture_group, uniform_group};
 use super::paging::cell_rect;
 use super::textures::{CachedPattern, Cell, ChunkOut, ResKey, Resident, ResidentRef, Stats, Tex, TexKind};
@@ -9,6 +9,26 @@ use super::{Arc, Compositor, DocId, HashMap, I, Kernel, Pattern, Plan, Rect, Rol
 /// Each of the RGBA and encoded upload buffers is bounded independently, rather
 /// than retaining two expanded copies of a compact pattern's entire texture.
 const PATTERN_UPLOAD_BAND_BYTES: u64 = 4 << 20;
+/// Stage only larger refreshes, where a buffer write amortizes setup; live strokes often touch
+/// just one tile and stay on the direct upload path.
+const MIN_BATCH_UPLOAD_TILES: usize = CONVERT_BATCH / 2;
+
+fn put_converted_batch<T>(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    r: &Resident,
+    groups: &[(T, Vec<TileCoord>)],
+    bytes: &[Vec<u8>],
+) -> u64 {
+    let tile_count = groups.iter().map(|(_, coords)| coords.len()).sum::<usize>();
+    if tile_count < MIN_BATCH_UPLOAD_TILES {
+        groups.iter().zip(bytes).map(|((_, coords), bytes)| put_tiles(device, queue, encoder, r, coords, bytes)).sum()
+    } else {
+        let uploads: Vec<_> = groups.iter().zip(bytes).map(|((_, coords), bytes)| (coords.as_slice(), bytes.as_slice())).collect();
+        put_tile_batch(device, queue, encoder, r, &uploads)
+    }
+}
 
 fn pattern_upload_bands(
     pat: &Pattern,
@@ -438,8 +458,7 @@ impl Compositor {
                 }
                 let staged = &mut self.staged;
                 convert_tiles(surface, present, kind, |groups, bytes| {
-                    let uploads: Vec<_> = groups.iter().zip(bytes).map(|((_, cs), bytes)| (cs.as_slice(), bytes.as_slice())).collect();
-                    *staged += put_tile_batch(device, queue, encoder, &r, &uploads);
+                    *staged += put_converted_batch(device, queue, encoder, &r, groups, bytes);
                     for ((t, cs), bytes) in groups.iter().zip(bytes) {
                         for &c in cs {
                             stats.tiles_uploaded += 1;
@@ -485,8 +504,7 @@ impl Compositor {
         }
         let staged = &mut self.staged;
         convert_tiles(surface, changed, kind, |groups, bytes| {
-            let uploads: Vec<_> = groups.iter().zip(bytes).map(|((_, cs), bytes)| (cs.as_slice(), bytes.as_slice())).collect();
-            *staged += put_tile_batch(device, queue, encoder, r, &uploads);
+            *staged += put_converted_batch(device, queue, encoder, r, groups, bytes);
             for ((t, cs), bytes) in groups.iter().zip(bytes) {
                 for &c in cs {
                     stats.tiles_uploaded += 1;
