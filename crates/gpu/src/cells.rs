@@ -1,6 +1,6 @@
 use super::batch::{batch_kernel, batch_op_words, op_words, submit_batch};
 use super::consts::{FLUSH_OPS, MAP32, STRIDE};
-use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tiles, words};
+use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tile_batch, put_tiles, words};
 use super::kit::{Bound, FrameRes, texture_group, uniform_group};
 use super::paging::cell_rect;
 use super::textures::{CachedPattern, Cell, ChunkOut, ResKey, Resident, ResidentRef, Stats, Tex, TexKind};
@@ -437,12 +437,15 @@ impl Compositor {
                     self.staged += put_tiles(device, queue, encoder, &r, &missing, &bytes);
                 }
                 let staged = &mut self.staged;
-                convert_tiles(surface, present, kind, |t, cs, bytes| {
-                    *staged += put_tiles(device, queue, encoder, &r, cs, bytes);
-                    for &c in cs {
-                        stats.tiles_uploaded += 1;
-                        stats.bytes_uploaded += bytes.len();
-                        r.tiles.insert(c, t.clone());
+                convert_tiles(surface, present, kind, |groups, bytes| {
+                    let uploads: Vec<_> = groups.iter().zip(bytes).map(|((_, cs), bytes)| (cs.as_slice(), bytes.as_slice())).collect();
+                    *staged += put_tile_batch(device, queue, encoder, &r, &uploads);
+                    for ((t, cs), bytes) in groups.iter().zip(bytes) {
+                        for &c in cs {
+                            stats.tiles_uploaded += 1;
+                            stats.bytes_uploaded += bytes.len();
+                            r.tiles.insert(c, t.clone());
+                        }
                     }
                 });
             }
@@ -481,12 +484,15 @@ impl Compositor {
             self.staged += put_tiles(device, queue, encoder, r, &gone, &bytes);
         }
         let staged = &mut self.staged;
-        convert_tiles(surface, changed, kind, |t, cs, bytes| {
-            *staged += put_tiles(device, queue, encoder, r, cs, bytes);
-            for &c in cs {
-                stats.tiles_uploaded += 1;
-                stats.bytes_uploaded += bytes.len();
-                r.tiles.insert(c, t.clone());
+        convert_tiles(surface, changed, kind, |groups, bytes| {
+            let uploads: Vec<_> = groups.iter().zip(bytes).map(|((_, cs), bytes)| (cs.as_slice(), bytes.as_slice())).collect();
+            *staged += put_tile_batch(device, queue, encoder, r, &uploads);
+            for ((t, cs), bytes) in groups.iter().zip(bytes) {
+                for &c in cs {
+                    stats.tiles_uploaded += 1;
+                    stats.bytes_uploaded += bytes.len();
+                    r.tiles.insert(c, t.clone());
+                }
             }
         });
         Some((key, [region.x0, region.y0, region.width() as i32, region.height() as i32]))
