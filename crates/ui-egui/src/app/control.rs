@@ -34,6 +34,12 @@ impl PhotocraftApp {
                 let _ = reply.send(serde_json::json!({"ok": false, "error": crate::control::expired_error()}));
                 continue;
             }
+            if req.method == "ui.latency.arm" {
+                let result = self.latency.as_mut().ok_or("latency recorder disabled").and_then(|r| r.arm(&req.params));
+                let value = result.map_or_else(|e| serde_json::json!({"ok":false,"error":e}), |_| serde_json::json!({"ok":true,"result":{"armed":true}}));
+                let _ = reply.send(value);
+                continue;
+            }
             match crate::control::handle(self, ctx, &req) {
                 crate::control::Outcome::Done(v) => {
                     let _ = reply.send(v);

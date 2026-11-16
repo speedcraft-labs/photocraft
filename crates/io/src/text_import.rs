@@ -70,6 +70,8 @@ pub(crate) fn prepare_within(
     budget: &mut u64,
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<usize, photocraft_raster::Cancelled> {
+    let trace = std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some();
+    let trace_start = std::time::Instant::now();
     #[allow(clippy::too_many_arguments)]
     fn visit(
         layers: &mut [Layer],
@@ -124,5 +126,6 @@ pub(crate) fn prepare_within(
     let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     let mut skipped = 0;
     visit(&mut doc.layers, &mut eng, dpi, format, txt2, budget, ctl, &mut skipped)?;
+    if trace { eprintln!("composite trace layer-prep: {:.3} ms", trace_start.elapsed().as_secs_f64() * 1000.0); }
     Ok(skipped)
 }
