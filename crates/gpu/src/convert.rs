@@ -82,6 +82,8 @@ pub(crate) fn put_tile_batch(
     if staged == 0 {
         return 0;
     }
+    let trace = std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some();
+    let trace_start = std::time::Instant::now();
     let mut data = Vec::with_capacity(staged);
     for (_, bytes) in groups {
         debug_assert_eq!(bytes.len(), row * tile_size);
@@ -94,17 +96,25 @@ pub(crate) fn put_tile_batch(
             }
         }
     }
+    let prepare_ms = trace_start.elapsed().as_secs_f64() * 1000.0;
+    let create_start = std::time::Instant::now();
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("pc_tile_upload_batch"),
         size: staged as u64,
         usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
+    let create_ms = create_start.elapsed().as_secs_f64() * 1000.0;
+    let write_start = std::time::Instant::now();
     queue.write_buffer(&buffer, 0, &data);
+    let write_ms = write_start.elapsed().as_secs_f64() * 1000.0;
     let extent = wgpu::Extent3d { width: TILE_SIZE as u32, height: TILE_SIZE as u32, depth_or_array_layers: 1 };
     let mut offset = 0;
+    let mut copies = 0;
+    let copy_start = std::time::Instant::now();
     for (coords, _) in groups {
         for c in *coords {
+            copies += 1;
             let tr = c.rect();
             encoder.copy_buffer_to_texture(
                 wgpu::TexelCopyBufferInfo {
@@ -121,6 +131,9 @@ pub(crate) fn put_tile_batch(
             );
         }
         offset += tile_stride as u64;
+    }
+    if trace {
+        eprintln!("composite trace tile-batch: {} tiles, {:.3} MiB; prepare {:.3} ms, buffer {:.3} ms, write {:.3} ms, {} copy commands {:.3} ms", copies, staged as f64 / (1024.0 * 1024.0), prepare_ms, create_ms, write_ms, copies, copy_start.elapsed().as_secs_f64() * 1000.0);
     }
     staged as u64
 }
@@ -187,9 +200,11 @@ pub(crate) fn convert_tiles(
     // don't inherit this thread's CMYK profile scope, so each band enters it.
     let bands = if colour_managed(&surface.format(), kind) { TILE_SIZE / MANAGED_BAND_ROWS } else { 1 };
     let space = photocraft_color::convert::active_cmyk_space();
+    let trace = std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some();
     for batch in groups.chunks(CONVERT_BATCH) {
         // A tile's content is the same at every coordinate sharing it: convert it at the first.
         let jobs: Vec<_> = batch.iter().filter_map(|(t, cs)| cs.first().map(|c| (t, *c))).flat_map(|(t, c)| (0..bands).map(move |b| (t, c, b))).collect();
+        let convert_start = std::time::Instant::now();
         let parts = fx::par_map(jobs, |(t, c, b)| {
             photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
                 if bands == 1 {
@@ -200,6 +215,7 @@ pub(crate) fn convert_tiles(
                 convert_rows(surface, Some(t), kind, Rect::new(r.x0, y0, r.x1, y0 + MANAGED_BAND_ROWS))
             })
         });
+        let convert_ms = convert_start.elapsed().as_secs_f64() * 1000.0;
         // One part (every format but CMYK and Lab) goes through as is: no copy per tile.
         let converted = if bands == 1 {
             parts
@@ -216,7 +232,9 @@ pub(crate) fn convert_tiles(
             }
             converted
         };
+        let put_start = std::time::Instant::now();
         put(batch, &converted);
+        if trace { eprintln!("composite trace tile-convert-batch: {} tiles, convert {:.3} ms, put {:.3} ms", batch.len(), convert_ms, put_start.elapsed().as_secs_f64() * 1000.0); }
         // The texels are on their way to the GPU: the buffers serve the next batch.
         converted.into_iter().for_each(scratch::give);
     }

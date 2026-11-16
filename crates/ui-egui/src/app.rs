@@ -2,11 +2,11 @@ use super::services::{ExportSettings, FormatChoices, SAVE_OPTIONS_OPEN, SaveKind
 use super::{
     ControlRequest, DocId, Document, HashMap, PhotocraftApp, Receiver, Session, SyntheticTarget, Tool, UiState, Value, actions, analysis_ui, brush_panel,
     brush_picker, camera_raw_ui, canvas, dds_options_ui, delete_layer_prompt, dialogs, discard_ui, distort_ui, dock, field_wheel, file_open, gpu_canvas,
-    gpu_status, gradient_ui, histogram_panel, i18n, jobs_ui, jpeg_options_ui, json, kys_import, last_brush, layers_panel_ui, mask_thumbs_ui, mask_trash_prompt,
-    monitor_status, native_menu, notices, open_prompt, paint_mouse, palette, panel_docking, panels, prefs_ui, preset_files_ui, preset_panels, rasterize_prompt,
-    screen_picker, shape_stroke_ui, shortcuts, single_line_drag, smart_svg_ui, state, stroke_trace, stylus, targa_options_ui, text_field_menu, theme,
-    tiff_options_ui, timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, type_transform, updates_ui, vector_ui,
-    view_cmds, wheel_nav, wide_angle_ui, widgets, work_area, workspace_ui,
+    gpu_status, gradient_ui, histogram_panel, i18n, jobs_ui, jpeg_options_ui, json, kys_import, last_brush, latency, layers_panel_ui, mask_thumbs_ui,
+    mask_trash_prompt, monitor_status, native_menu, notices, open_prompt, paint_mouse, palette, panel_docking, panels, prefs_ui, preset_files_ui,
+    preset_panels, rasterize_prompt, screen_picker, shape_stroke_ui, shortcuts, single_line_drag, smart_svg_ui, state, stroke_trace, stylus, targa_options_ui,
+    text_field_menu, theme, tiff_options_ui, timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, type_transform,
+    updates_ui, vector_ui, view_cmds, wheel_nav, wide_angle_ui, widgets, work_area, workspace_ui,
 };
 
 mod clipboard;
@@ -33,6 +33,11 @@ pub(crate) use thumbs::layer_thumb_frame;
 pub use thumbs::surface_fingerprint;
 
 impl PhotocraftApp {
+    /// Clone the optional latency read endpoint for the local control transport.
+    pub fn latency_reader(&self) -> Option<latency::Reader> {
+        self.latency.as_ref().map(|r| r.reader())
+    }
+
     /// Creates a new application state managing the engine session and UI services; the session
     /// keeps the services' automation policy as the gate actions automation wrote play under.
     pub fn new(mut session: Session, mut services: Services) -> Self {
@@ -90,6 +95,7 @@ impl PhotocraftApp {
             caps_lock: false,
             opacity_keys: None,
             control_rx: None,
+            latency: latency::Recorder::from_env(),
             captures: crate::screenshot::Captures::default(),
             type_ime: type_tool::ImeState::default(),
             input_waiters: Vec::new(),
@@ -288,6 +294,12 @@ impl eframe::App for PhotocraftApp {
             wheel_nav::fold_legacy_pinch(ctx, raw_input);
         }
         self.inject_synthetic(ctx, raw_input);
+        if let Some(recorder) = &mut self.latency {
+            recorder.accept_events(&raw_input.events);
+            if let Some(delay) = recorder.test_delay_after_accept() {
+                std::thread::sleep(delay);
+            }
+        }
         // After the control channel's own events (`ui.type`) join the OS's, before any widget.
         widgets::cap_text_events(&mut raw_input.events);
         self.control_click.normalize(&mut raw_input.events, cfg!(target_os = "macos"));
