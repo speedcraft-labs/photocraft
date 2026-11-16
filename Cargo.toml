@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
+craft-blur = { package = "craft-blur", git = "https://github.com/speedcraft-labs/craft-libs", rev = "f0507f3d4512dfc880388a4b9687e411a27e0b35" }
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a", features = ["serde"] }
 # Feature flags shared with the launcher and the other Craft apps (craft-libs#1118, #1119).
 craft-flags = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
