@@ -130,9 +130,13 @@ impl Compositor {
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
         flush: bool,
     ) -> Result<Stats, Unsupported> {
+        let trace = std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some();
+        let trace_start = std::time::Instant::now();
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
+        let plan_start = std::time::Instant::now();
         let plan = plan(doc)?;
+        if trace { eprintln!("composite trace plan: {:.3} ms, {} passes", plan_start.elapsed().as_secs_f64() * 1000.0, plan.passes.len()); }
         self.check_fx(doc, &plan)?;
         self.pattern_mode = doc.pixel_format().mode;
         self.pattern_doc = doc.id;
@@ -178,12 +182,19 @@ impl Compositor {
         // regions larger than the limit are built per cell below.
         let paged: Vec<bool> = plan.fx.iter().map(|f| self.fx_paged(f.region)).collect();
         let aprons: Vec<i32> = plan.fx.iter().zip(&paged).map(|(f, &pg)| if pg { Self::fx_apron(doc, f) } else { 0 }).collect();
+        let mut whole_fx_ns = 0u128;
         for (f, &pg) in plan.fx.iter().zip(&paged) {
             if !pg {
+                let t = std::time::Instant::now();
                 self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats)?;
+                let ns = t.elapsed().as_nanos();
+                whole_fx_ns += ns;
+                if trace { eprintln!("composite trace whole-fx layer={:?}: {:.3} ms", f.layer.name, ns as f64 / 1e6); }
             }
         }
+        let fr_start = std::time::Instant::now();
         let fr = self.frame_res(device, queue, canvas, &plan)?;
+        if trace { eprintln!("composite trace frame resources: {:.3} ms", fr_start.elapsed().as_secs_f64() * 1000.0); }
 
         // Page cells; every other frame in reverse, so a repeated full refresh of a document
         // larger than the budget starts with the pages still resident.
@@ -201,6 +212,8 @@ impl Compositor {
         let mut last_submit: Option<wgpu::SubmissionIndex> = None;
         // Work recorded and bytes evicted since the last submit.
         let (mut work, mut freed) = (0u64, 0u64);
+        let mut fx_ns = 0u128;
+        let mut cell_ns = 0u128;
         for part in cells {
             self.stamp += 1;
             let cell = (part.x0.div_euclid(page as i32), part.y0.div_euclid(page as i32));
@@ -211,13 +224,21 @@ impl Compositor {
                     continue;
                 }
                 let window = pf.inflate(aprons.get(i).copied().unwrap_or(0)).intersect(&f.region);
+                let t = std::time::Instant::now();
                 self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, Some(cell)), window, &mut stats)?;
+                let ns = t.elapsed().as_nanos();
+                fx_ns += ns;
+                if trace && ns > 1_000_000 { eprintln!("composite trace paged-fx layer={:?} cell={cell:?}: {:.3} ms", f.layer.name, ns as f64 / 1e6); }
             }
             let chunks = grid_rects(part, self.chunk);
             stats.chunks += chunks.len();
             work += part.width() as u64 * part.height() as u64 * plan.passes.len() as u64;
             let mut batch = flush.then_some(&mut last_submit);
+            let t = std::time::Instant::now();
             self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
+            let ns = t.elapsed().as_nanos();
+            cell_ns += ns;
+            if trace { eprintln!("composite trace cell={cell:?} chunks={} bind+encode: {:.3} ms", chunks.len(), ns as f64 / 1e6); }
             // The device was lost in a submit inside the cell: issue no more work.
             if let Some(f) = self.fault() {
                 return Err(Unsupported(f.to_string()));
@@ -251,7 +272,11 @@ impl Compositor {
                     return Err(Unsupported(f.to_string()));
                 }
                 let mut batch = Some(&mut last_submit);
+                let t = std::time::Instant::now();
                 self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
+                let ns = t.elapsed().as_nanos();
+                cell_ns += ns;
+                if trace { eprintln!("composite trace cell-retry={cell:?} chunks={} bind+encode: {:.3} ms", chunks.len(), ns as f64 / 1e6); }
                 if let Some(f) = self.fault() {
                     return Err(Unsupported(f.to_string()));
                 }
@@ -287,6 +312,7 @@ impl Compositor {
         stats.evicted += self.evict().0;
         self.temps.retain(|(_, used)| frame.saturating_sub(*used) < 240);
         self.evict_patterns();
+        if trace { eprintln!("composite trace totals: {:.3} ms total, {:.3} ms whole-fx, {:.3} ms paged-fx, {:.3} ms cell bind+encode; {} cells, {} chunks, {} uploaded tiles, {} fx shapes/{} programs", trace_start.elapsed().as_secs_f64() * 1000.0, whole_fx_ns as f64 / 1e6, fx_ns as f64 / 1e6, cell_ns as f64 / 1e6, stats.cells, stats.chunks, stats.tiles_uploaded, stats.fx_shapes, stats.fx_programs); }
         Ok(stats)
     }
 
