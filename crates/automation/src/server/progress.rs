@@ -1,9 +1,8 @@
 //! Progress and cancellation for calls that wait. Render Video runs on the existing blocking
 //! worker; other long commands run as engine jobs that the server polls ([`Waiter`]): the headless
 //! session's own, or the app's over the bridge.
-use super::{Arc, AutomationError, BridgeClient, CallToolResult, PhotocraftMcp, PoisonError, Value, fail, json, no_backend, ok_json};
+use super::{Arc, AutomationError, Backend, BridgeClient, CallToolResult, PhotocraftMcp, PoisonError, Value, fail, json, no_backend, ok_json};
 use crate::headless::JobPoll;
-use crate::live::Target;
 use photocraft_engine::jobs::{JobId, Started};
 use rmcp::RoleServer;
 use rmcp::model::ProgressNotificationParam;
@@ -93,9 +92,7 @@ impl Waiter {
 /// Cancels a waited job when its waiter goes away without collecting it: rmcp may drop the
 /// request future on cancellation, and nothing else would stop the job.
 struct Abandon {
-    /// The session or app that started the job: in live mode the current target can change
-    /// before the guard drops, and the job id means nothing elsewhere.
-    target: Target,
+    backend: Arc<Backend>,
     job: Option<JobId>,
 }
 
@@ -103,8 +100,8 @@ impl Drop for Abandon {
     fn drop(&mut self) {
         let Some(job) = self.job.take() else { return };
         let runtime = tokio::runtime::Handle::try_current();
-        match &self.target {
-            Target::Headless(session) => {
+        match &*self.backend {
+            Backend::Headless(session) => {
                 let session = session.clone();
                 let abandon = move || drop(session.lock().unwrap_or_else(PoisonError::into_inner).job_abandon(job));
                 match runtime {
@@ -114,7 +111,7 @@ impl Drop for Abandon {
                 }
             }
             // Without a runtime there is no way to reach the app; the job then runs to the end.
-            Target::Bridge(client) => {
+            Backend::Bridge(client) => {
                 if let Ok(runtime) = runtime {
                     let client = client.clone();
                     drop(runtime.spawn(async move { client.call("jobs.cancel", json!({"job": job.0})).await }));
@@ -130,7 +127,10 @@ impl PhotocraftMcp {
     /// `waiter` as `step.0 + fraction` of `step.1`, and cancelling the request cancels the job,
     /// leaving the document unchanged. `None` in bridge mode.
     pub(super) async fn headless_wait(&self, id: String, params: Value, waiter: &mut Waiter, step: (usize, usize)) -> Option<Result<Value, AutomationError>> {
-        let target = Target::Headless(self.headless_session()?);
+        if !matches!(&*self.backend, Backend::Headless(_)) {
+            return None;
+        }
+        let backend = self.backend.clone();
         let cancel = waiter.context.as_ref().map(|context| context.ct.clone());
         // The guard is armed under the lock that starts the job: when the request is dropped while
         // the start still waits for the lock, the closure's output is dropped unread and cancels it.
@@ -143,7 +143,7 @@ impl PhotocraftMcp {
                     Started::Job(job) if cancel.as_ref().is_some_and(|token| token.is_cancelled()) => {
                         return h.job_abandon(job).map(Err);
                     }
-                    Started::Job(job) => Ok(Abandon { target, job: Some(job) }),
+                    Started::Job(job) => Ok(Abandon { backend, job: Some(job) }),
                     Started::Done(value) => Err(value),
                 })
             })
@@ -187,7 +187,7 @@ impl PhotocraftMcp {
     /// (#1007); a failed poll reports the job instead of guessing its outcome.
     pub(super) async fn bridge_wait(
         &self,
-        client: &Arc<BridgeClient>,
+        client: &BridgeClient,
         id: String,
         params: Value,
         waiter: &mut Waiter,
@@ -202,7 +202,7 @@ impl PhotocraftMcp {
         let Some(job) = started.get("job").and_then(Value::as_u64).filter(|_| pending) else {
             return Ok(started);
         };
-        let mut guard = Abandon { target: Target::Bridge(client.clone()), job: Some(JobId(job)) };
+        let mut guard = Abandon { backend: self.backend.clone(), job: Some(JobId(job)) };
         let mut delay = Duration::from_millis(10);
         loop {
             // Race the poll against a cancel: an app slow to answer must not hold it until the call times out.

@@ -70,11 +70,10 @@ fn reset_all_tools_from_another_tool_gives_the_brush_its_tip() {
     let mut app = app();
     pick(&mut app, Tool::Brush);
     scramble(&mut app);
-    // The Sharpen tool, which has no reset tip of its own (the Eraser has since #11936).
-    pick(&mut app, Tool::Sharpen);
+    pick(&mut app, Tool::Eraser);
     scramble(&mut app);
     control(&mut app, "ui.menu.invoke", json!({"id": "tool.resetAll", "params": {"confirmed": true}}));
-    assert_eq!(tip(&mut app), DEFAULT_TIP, "the Sharpen tool");
+    assert_eq!(tip(&mut app), DEFAULT_TIP, "the Eraser");
     pick(&mut app, Tool::Brush);
     assert_eq!(tip(&mut app), BRUSH_TIP, "the Brush");
 }
@@ -86,7 +85,7 @@ fn reset_all_tools_from_the_brush_gives_the_other_tools_the_default_tip() {
     let mut app = app();
     pick(&mut app, Tool::Brush);
     control(&mut app, "ui.menu.invoke", json!({"id": "tool.resetAll", "params": {"confirmed": true}}));
-    for tool in [Tool::Sharpen, Tool::Blur] {
+    for tool in [Tool::Pencil, Tool::Eraser] {
         pick(&mut app, tool);
         assert_eq!(tip(&mut app), DEFAULT_TIP, "{tool:?}");
     }
@@ -94,7 +93,7 @@ fn reset_all_tools_from_the_brush_gives_the_other_tools_the_default_tip() {
 
 #[test]
 fn other_painting_tools_keep_the_default_reset_tip() {
-    for tool in [Tool::Sharpen, Tool::Blur] {
+    for tool in [Tool::Pencil, Tool::Eraser] {
         let mut a = app();
         pick(&mut a, tool);
         scramble(&mut a);

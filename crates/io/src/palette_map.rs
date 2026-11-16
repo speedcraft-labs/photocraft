@@ -28,20 +28,18 @@ pub(crate) fn document_to_psd(
     force_psb: bool,
     size_limit: Option<u64>,
     patterns: Option<&[photocraft_doc::PsdGlobalBlock]>,
-) -> Result<Option<(PsdFile, Vec<String>)>, crate::IoError> {
+) -> Option<(PsdFile, Vec<String>)> {
     if !doc.channels.is_empty() || doc.quick_mask.is_some() {
-        return Ok(None);
+        return None;
     }
     let table = doc.color_table.as_ref().filter(|t| t.colors.len() <= 256 && (0..t.colors.len()).any(|i| Some(i) != t.transparent.map(usize::from)));
     let (mode, plane, color_mode_data) = match doc.mode {
         ColorMode::Indexed => {
-            let Some(table) = table else {
-                return Ok(None);
-            };
+            let table = table?;
             (PsdMode::Indexed, indices(doc, table), palette(table))
         }
         ColorMode::Bitmap => (PsdMode::Bitmap, bits(doc), Vec::new()),
-        _ => return Ok(None),
+        _ => return None,
     };
     let mut warnings = Vec::new();
     if !flattens_losslessly(doc) {
@@ -72,8 +70,8 @@ pub(crate) fn document_to_psd(
     }
     // An imported transparency index that no longer applies is not copied either.
     let keep = |id: u16, _: &[u8]| !CHANNEL_RESOURCES.contains(&id) && id != TRANSPARENCY_INDEX && id != COLOR_TABLE_COUNT;
-    let file = crate::multichannel_map::layerless_file(doc, header, image_data, color_mode_data, resources, keep, size_limit, &mut warnings, patterns)?;
-    Ok(Some((file, warnings)))
+    let file = crate::multichannel_map::layerless_file(doc, header, image_data, color_mode_data, resources, keep, size_limit, &mut warnings, patterns);
+    Some((file, warnings))
 }
 
 /// Whether the merged image holds everything the layers do: no layer, or a single visible pixel
@@ -169,7 +167,7 @@ mod tests {
     }
 
     fn round_trip(doc: &Document) -> (PsdFile, Document) {
-        let (file, _) = document_to_psd(doc, false, None, None).unwrap().unwrap();
+        let (file, _) = document_to_psd(doc, false, None, None).unwrap();
         let bytes = file.to_bytes().unwrap();
         let file = PsdFile::from_bytes(&bytes).unwrap();
         let back = crate::import("test.psd", &bytes).unwrap().document;
@@ -221,17 +219,17 @@ mod tests {
         assert_eq!(back.color_table, doc.color_table);
         for count in [0, 257] {
             doc.color_table = Some(ColorTable { colors: vec![[0, 0, 0]; count], transparent: None });
-            assert!(document_to_psd(&doc, false, None, None).unwrap().is_none(), "{count}");
+            assert!(document_to_psd(&doc, false, None, None).is_none(), "{count}");
         }
         doc.color_table = None;
-        assert!(document_to_psd(&doc, false, None, None).unwrap().is_none());
+        assert!(document_to_psd(&doc, false, None, None).is_none());
     }
 
     #[test]
     fn indexed_import_bounds_malformed_count_and_transparency_resources() {
         let mut doc = document(1, 1, SampleType::U8, ColorMode::Indexed, &[0.0, 0.0, 0.0, 1.0]);
         doc.color_table = Some(ColorTable { colors: vec![[0, 0, 0], [255, 255, 255]], transparent: None });
-        let (original, _) = document_to_psd(&doc, false, None, None).unwrap().unwrap();
+        let (original, _) = document_to_psd(&doc, false, None, None).unwrap();
         for (count, expected) in [(vec![0, 0], 1), (vec![1, 1], 256), (vec![255, 255], 256), (vec![0], 256)] {
             let mut file = original.clone();
             file.resources.retain(|r| r.id != COLOR_TABLE_COUNT);

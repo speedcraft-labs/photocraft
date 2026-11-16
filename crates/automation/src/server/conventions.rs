@@ -1,5 +1,5 @@
 //! Catalog metadata, strict tool envelopes and live resources.
-use super::{Arc, BatchParams, DocIndex, ListParams, McpError, Parameters, PhotocraftMcp, RunParams, ServerHandler, Value, fail, json};
+use super::{Arc, Backend, BatchParams, DocIndex, ListParams, McpError, Parameters, PhotocraftMcp, RunParams, ServerHandler, Value, json};
 use rmcp::RoleServer;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, Implementation, ListResourcesResult, ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams,
@@ -55,10 +55,7 @@ impl ServerHandler for PhotocraftMcp {
             let args = Value::Object(request.arguments.clone().unwrap_or_default());
             let _: BatchParams = serde_json::from_value(args).map_err(|e| McpError::invalid_params(e.to_string(), None))?;
         }
-        if let Err(error) = self.ready().await {
-            return Ok(fail(error).into());
-        }
-        if request.name == "command_run" && self.headless_session().is_some() {
+        if request.name == "command_run" && matches!(&*self.backend, Backend::Headless(_)) {
             let args = Value::Object(request.arguments.clone().unwrap_or_default());
             let params: RunParams = serde_json::from_value(args).map_err(|e| McpError::invalid_params(e.to_string(), None))?;
             if params.id == "file.export.renderVideo" {
@@ -77,9 +74,6 @@ impl ServerHandler for PhotocraftMcp {
     }
 
     async fn read_resource(&self, request: ReadResourceRequestParams, _: RequestContext<RoleServer>) -> Result<ReadResourceResponse, McpError> {
-        if let Err(error) = self.ready().await {
-            return Err(McpError::internal_error(error, None));
-        }
         let result = match request.uri.as_str() {
             DOCUMENT => self.doc_inspect(Parameters(DocIndex::default())).await?,
             COMMANDS => self.command_list(Parameters(ListParams::default())).await?,

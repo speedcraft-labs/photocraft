@@ -148,7 +148,7 @@ fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
         Tool::Pen,
         Tool::FreeformPen,
         Tool::CurvaturePen,
-        // Add Anchor Point shows the pen only over a segment (#12729): `add_anchor_cursor_tests`.
+        Tool::AddAnchorPoint,
         Tool::DeleteAnchorPoint,
         Tool::ConvertPoint,
         Tool::Eyedropper,

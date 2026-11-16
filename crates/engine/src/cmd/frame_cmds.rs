@@ -109,9 +109,7 @@ fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
                 Some(child)
             }
         };
-        // A frame drawn around a layer is named after it ("Red Frame"); an empty one is "Frame N".
-        let name = name.unwrap_or_else(|| child.as_ref().map_or_else(|| doc.next_layer_name("Frame"), |c| format!("{} Frame", c.name)));
-        let mut g = Layer::group(name, vec![]);
+        let mut g = Layer::group(name.unwrap_or_else(|| doc.next_layer_name("Frame")), vec![]);
         g.blend = BlendMode::Normal;
         g.frame = Some(Box::new(f));
         refresh(&mut g);
@@ -137,11 +135,8 @@ fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 fn frame_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
-    // A `layer` of its own (a recorded step names its layer) is what the grouping below takes
-    // in, so the frame fits that layer, not whatever is selected.
-    let explicit = crate::commands::explicit_layer(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let ids = explicit.map_or_else(|| st.selected_layers(), |id| vec![id]);
+    let ids = st.selected_layers();
     let bounds = ids
         .iter()
         .filter_map(|id| st.doc.layer(*id))
@@ -186,14 +181,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if !["transform", "stroke", "name"].iter().any(|key| p.get(key).is_some()) {
         return Err(bad("supply transform, stroke or name"));
     }
-    // The Frame tool moves a frame as a "Move" step (#13880); every other change is "Frame Properties".
-    let step = match p.get("historyName") {
-        None | Some(Value::Null) => "Frame Properties",
-        Some(v) if v.as_str() == Some("Move") => "Move",
-        Some(_) => return Err(bad("`historyName` must be \"Move\" or null")),
-    };
     let id = frame_id(s, p)?;
-    s.edit(step, |doc, _| {
+    s.edit("Frame Properties", |doc, _| {
         check_lock(doc, id)?;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let f = l.frame.as_mut().ok_or_else(|| bad("not a frame"))?;
@@ -370,17 +359,8 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             new_frame,
         ),
-        CommandSpec {
-            menu: &["Layer", "New"],
-            ..spec("layer.new.frameFromLayers", "Frame from Layers", r#"{"layer":id?,"name":str?}"#, has_layer, frame_from_layers)
-        },
-        spec(
-            "layer.frame.set",
-            "Frame Properties",
-            r#"{"layer":id?,"transform":[a,b,c,d,x,y]?,"stroke":object|null?,"name":str?,"historyName":"Move"?}"#,
-            has_doc,
-            set,
-        ),
+        CommandSpec { menu: &["Layer", "New"], ..spec("layer.new.frameFromLayers", "Frame from Layers", r#"{name?:str}"#, has_layer, frame_from_layers) },
+        spec("layer.frame.set", "Frame Properties", r#"{"layer":id?,"transform":[a,b,c,d,x,y]?,"stroke":object|null?,"name":str?}"#, has_doc, set),
         CommandSpec { journal: false, ..spec("layer.frame.info", "Frame Info", r#"{"layer":id?}"#, has_doc, query) },
         spec("layer.frame.convert", "Convert to Frame", r#"{"layer":id?,"name":str?,"width":px?,"height":px?}"#, has_doc, convert),
         spec(
@@ -393,7 +373,5 @@ pub fn specs() -> Vec<CommandSpec> {
         spec("layer.frame.fit", "Fit Frame / Content", r#"{"layer":id?,"mode":"contentToFrame|frameToContent"="contentToFrame"}"#, has_doc, fit),
     ]
 }
-#[cfg(test)]
-mod content_name_tests;
 #[cfg(test)]
 mod tests;
