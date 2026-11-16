@@ -45,13 +45,12 @@ fn metadata() {
     assert_eq!(sensor.active, Rect::new(0, 0, 16, 12));
     assert_eq!(sensor.black, BlackLevels::uniform(4096.0));
     assert_eq!(sensor.white, [64763.0; 3]);
-    // craft-raw reads AsShotNeutral as the DNG colour tag; development turns it into multipliers.
-    let neutral = sensor.color.as_shot_neutral.unwrap();
-    assert!((neutral[0] - 0.375).abs() < 1e-9 && (neutral[2] - 0.617).abs() < 1e-9, "{neutral:?}");
-    assert_eq!((sensor.make.as_deref(), sensor.model.as_deref()), (Some("Hasselblad"), Some("Hasselblad X2D II 100C")));
+    let wb = sensor.camera_wb.unwrap();
+    assert!((wb[0] - 1.0 / 0.375).abs() < 1e-9, "{wb:?}");
+    assert!((wb[2] - 1.0 / 0.617).abs() < 1e-9, "{wb:?}");
+    assert_eq!((sensor.make.as_deref(), sensor.model.as_deref()), (Some("Hasselblad"), Some("X2D II 100C")));
     assert_eq!(sensor.orientation, 1);
-    // This fixture deliberately omits CFA tags; the RGGB fallback must remain visible to callers.
-    assert_eq!(sensor.warnings, ["the raw colour filter phase was assumed"]);
+    assert!(sensor.warnings.is_empty(), "{:?}", sensor.warnings);
 }
 
 #[test]
@@ -66,11 +65,19 @@ fn develops() {
 }
 
 #[test]
+fn unknown_body_warns_about_the_assumed_phase() {
+    let mut s = spec();
+    s.model = "X2D 100C".into();
+    let sensor = decode(&s.build(), &Limits::default()).unwrap();
+    assert!(sensor.warnings.iter().any(|w| w.contains("Bayer phase")), "{:?}", sensor.warnings);
+}
+
+#[test]
 fn compressed_3fr_is_reported_unsupported() {
     let mut s = spec();
     s.compression = 7;
     let e = decode(&s.build(), &Limits::default()).unwrap_err();
-    assert!(matches!(&e, RawError::Unsupported(reason) if reason.contains("lossless JPEG")), "{e:?}");
+    assert!(matches!(&e, RawError::Unsupported(reason) if reason.contains("lossless-JPEG")), "{e:?}");
 }
 
 #[test]
@@ -84,8 +91,9 @@ fn missing_levels_fall_back() {
     s.white = None;
     let sensor = decode(&s.build(), &Limits::default()).unwrap();
     assert_eq!(sensor.black, BlackLevels::uniform(0.0));
-    // craft-raw falls back to the full scale of the sample depth.
-    assert_eq!(sensor.white, [f32::from(u16::MAX); 3]);
+    assert!(sensor.warnings.iter().any(|w| w.contains("black level")), "{:?}", sensor.warnings);
+    // clip_level backs the clipped plateau off slightly.
+    assert!((sensor.white[0] - f32::from(u16::MAX) * 0.995).abs() < 1.0, "{:?}", sensor.white);
 }
 
 #[test]
@@ -119,18 +127,17 @@ fn an_active_area_outside_the_plane_is_ignored() {
     assert_eq!((sensor.active, sensor.crop), (Rect::new(0, 0, 16, 12), Rect::new(0, 0, 16, 12)));
 }
 
-/// Refuse truncated sensor data rather than silently inventing black pixels.
 #[test]
-fn truncated_strip_is_refused() {
+fn truncated_strip_is_malformed() {
     let mut b = spec().build();
     // The preview blob sits past the strip; cutting 60 bytes eats into the strip.
     b.truncate(b.len() - 60);
-    assert!(matches!(decode(&b, &Limits::default()), Err(photocraft_raw::RawError::Malformed(_))));
+    assert!(matches!(decode(&b, &Limits::default()), Err(RawError::Malformed(_))));
 }
 
 #[test]
 fn zero_dimensions_are_malformed() {
     let mut s = spec();
     s.width = 0;
-    assert!(decode(&s.build(), &Limits::default()).is_err());
+    assert!(matches!(decode(&s.build(), &Limits::default()), Err(RawError::Malformed(_))));
 }

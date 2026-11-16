@@ -10,7 +10,7 @@ use crate::PhotocraftApp;
 use crate::control::{ControlRequest, Outcome, handle};
 use crate::state::Tool;
 
-pub(super) fn app(mode: &str) -> PhotocraftApp {
+fn app(mode: &str) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -21,7 +21,7 @@ pub(super) fn app(mode: &str) -> PhotocraftApp {
     app
 }
 
-pub(super) fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
+fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
     let (req, _rx) = ControlRequest::new(method, params);
     match handle(app, ctx, &req) {
         Outcome::Done(v) => v,
@@ -29,7 +29,7 @@ pub(super) fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, p
     }
 }
 
-pub(super) fn right_click(app: &mut PhotocraftApp, ctx: &egui::Context, modifiers: Value) {
+fn right_click(app: &mut PhotocraftApp, ctx: &egui::Context, modifiers: Value) {
     call(
         app,
         ctx,
@@ -38,7 +38,7 @@ pub(super) fn right_click(app: &mut PhotocraftApp, ctx: &egui::Context, modifier
     );
 }
 
-pub(super) fn steps(app: &PhotocraftApp) -> usize {
+fn steps(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.past_len()
 }
 
@@ -94,7 +94,18 @@ fn with_the_erase_preference_block_mode_still_erases() {
 /// nothing is erased.
 #[test]
 fn a_real_right_click_opens_the_menu_and_escape_closes_it() {
-    let mut h = harness(app("block"));
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app("block"),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
     let n = steps(h.state());
     let c = h.state().last_canvas_rect.center();
     h.event(egui::Event::PointerMoved(c));
@@ -109,21 +120,4 @@ fn a_real_right_click_opens_the_menu_and_escape_closes_it() {
     h.run_steps(2);
     assert!(h.state().ui.brush_mode_menu.is_none(), "Escape closes it");
     assert_eq!(steps(h.state()), n, "nothing erased");
-}
-
-/// The canvas alone, drawn by the real mouse path.
-pub(super) fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-        },
-        app,
-    );
-    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
-    h
 }

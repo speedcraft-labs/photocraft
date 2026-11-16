@@ -167,7 +167,7 @@ impl BandChol {
         let n = a.diag.len();
         let mut p = 0;
         for i in 0..n {
-            for &col in a.cols.iter().take(a.rows[i + 1]).skip(a.rows[i]) {
+            for &col in &a.cols[a.rows[i]..a.rows[i + 1]] {
                 p = p.max(i.abs_diff(col));
             }
         }

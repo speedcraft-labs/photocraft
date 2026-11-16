@@ -10,8 +10,7 @@ use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 use crate::state::Tool;
 
-/// The canvas at 100 % on a 400 × 300 document with `tool` and a vertical guide at x = 200.
-pub(crate) fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
@@ -39,7 +38,7 @@ pub(crate) fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-pub(crate) fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
+fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
     let app = h.state();
     let v = &app.ui.views[0];
     ViewXform {
@@ -53,7 +52,7 @@ pub(crate) fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos
     .to_screen(x, y)
 }
 
-pub(crate) fn hover(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) -> egui::CursorIcon {
+fn hover(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) -> egui::CursorIcon {
     h.event(egui::Event::ModifiersChanged(m));
     let p = screen(h, x, y);
     h.event(egui::Event::PointerMoved(p));

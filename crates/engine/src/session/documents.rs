@@ -162,13 +162,11 @@ impl Session {
     }
 
     /// Add a document (from File → New, an import, etc.) and make it active.
-    /// Preserve its identity unless an open document or a picked clone source reserves it.
+    /// Preserve its identity unless another open document already owns it.
     /// Identity-dependent callers must read the admitted document at the returned index.
     pub fn add_document(&mut self, mut doc: Document, path: Option<String>) -> usize {
-        // A saved copy can reuse a closed source's persisted ID. Give the new tab another ID so
-        // a closed clone source stays invalid until the user explicitly picks a new source.
         // Persisted IDs can overlap the allocator, so check every replacement too.
-        while self.docs.iter().any(|st| st.doc.id == doc.id) || self.presets.clone.slots.iter().any(|slot| slot.document == Some(doc.id)) {
+        while self.docs.iter().any(|st| st.doc.id == doc.id) {
             doc.id = photocraft_doc::DocId::fresh();
         }
         self.open_document_order.push(doc.id);
@@ -217,7 +215,6 @@ impl Session {
             self.cancel_jobs_on(id);
             self.subject_cache.forget_doc(id);
             self.object_finder.forget_doc(id);
-            self.presets.clone.forget_doc(id);
             self.link_missing.retain(|(d, _)| *d != id.0);
             self.link_scan = None;
         }
