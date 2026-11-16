@@ -68,11 +68,53 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Git dependencies come from github.com/storytold, and Cargo.lock is complete and up to date.
+  # Git dependencies come from github.com/storytold, plus the fork's craft-libs pins for craft-blur
+  # and craft-bench. Cargo.lock must be complete and up to date.
   git-sources:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
-    # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
-    uses: storytold/craft-common-actions/.github/workflows/git-sources.yml@main
+    name: Git dependencies come from storytold
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Git dependencies come from storytold
+        run: |
+          set -euo pipefail
+          test -f Cargo.lock || { echo "Cargo.lock is missing"; exit 1; }
+          python3 - <<'PY'
+          import os, sys, tomllib
+          for name in (".cargo/config", ".cargo/config.toml"):
+              if not os.path.isfile(name):
+                  continue
+              with open(name, "rb") as config_file:
+                  config = tomllib.load(config_file)
+              replaced = sorted(source_name for source_name, source in config.get("source", {}).items()
+                                if isinstance(source, dict) and "replace-with" in source)
+              if replaced or "patch" in config or "paths" in config:
+                  print(f"{name} replaces, patches or overrides a source")
+                  sys.exit(1)
+          PY
+          cargo metadata --locked --format-version 1 > /dev/null
+          python3 - <<'PY'
+          import sys, tomllib
+          with open("Cargo.lock", "rb") as lock_file:
+              lock = tomllib.load(lock_file)
+          allowed = ("git+https://github.com/storytold/",
+                     "git+https://github.com/speedcraft-labs/craft-libs?")
+          bad = sorted({package["source"] for package in lock.get("package", [])
+                        if isinstance(package.get("source"), str)
+                        and package["source"].startswith("git+")
+                        and not package["source"].startswith(allowed)})
+          if bad:
+              print("Git dependencies outside the allowed sources:", *bad, sep="\n")
+              sys.exit(1)
+          PY
 
   # Whether the Windows legs and the web build run. main, manual runs and PRs labelled `full-ci`
   # get both. Other PRs get Windows when they touch code whose behaviour differs by platform: the
