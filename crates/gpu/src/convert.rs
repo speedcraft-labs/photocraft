@@ -7,6 +7,13 @@ use photocraft_raster::scratch;
 /// of a 16-bit page are 32 MiB).
 pub(crate) const CONVERT_BATCH: usize = 64;
 
+static TRACE_TILE_READ_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TRACE_TILE_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn tile_read_metrics() -> (u64, u64) {
+    (TRACE_TILE_READS.load(std::sync::atomic::Ordering::Relaxed), TRACE_TILE_READ_NS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 /// Write the same tile `bytes` at every coordinate in `cs` of resident `r`; returns the bytes
 /// staged. Several coordinates (a solid fill or a cleared area shares one tile) get one upload to
 /// a scratch tile and GPU copies from it: writing each one from the CPU sent 387 MB per refresh
@@ -235,8 +242,14 @@ pub(crate) fn colour_managed(fmt: &PixelFormat, kind: TexKind) -> bool {
 /// Tile pixels in the texture's format. `tile = None` gives the default pixel everywhere.
 pub(crate) fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, c: TileCoord) -> Vec<u8> {
     if let (Some(t), TexKind::Rgba8Direct | TexKind::R8Direct) = (tile, kind) {
+        let read_started = std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some().then(std::time::Instant::now);
+        let bytes = t.bytes();
+        if let Some(started) = read_started {
+            TRACE_TILE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            TRACE_TILE_READ_NS.fetch_add(started.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
         let mut out = scratch::take_cap(t.len());
-        out.extend_from_slice(&t.bytes());
+        out.extend_from_slice(&bytes);
         return out;
     }
     let fmt = surface.format();

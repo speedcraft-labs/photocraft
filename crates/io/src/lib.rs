@@ -698,9 +698,11 @@ fn import_psd(
     opts: &ImportOptions,
     parse: impl FnOnce(&dyn Fn(&PsdFile) -> craft_psd::Result<bool>, &dyn Fn(&PsdFile) -> bool) -> craft_psd::Result<(PsdFile, Option<craft_psd::Result<Vec<u8>>>)>,
 ) -> Result<ImportResult, IoError> {
+    let trace = std::env::var_os("PHOTOCRAFT_COMPOSITE_TRACE").is_some();
     let preflight_error = std::cell::RefCell::new(None);
     let admission_guard: std::cell::RefCell<Option<psd_gate::AdmissionGuard>> = std::cell::RefCell::new(None);
 
+    let parse_started = std::time::Instant::now();
     let parsed = parse(
         &|file| {
             // Only an import that keeps the layer tree is bound by the group nesting cap.
@@ -768,6 +770,7 @@ fn import_psd(
         },
         &psd_import::can_recover_layers,
     );
+    if trace { eprintln!("composite trace psd-source-read+structure-parse: {:.3} ms", parse_started.elapsed().as_secs_f64() * 1000.0); }
 
     if let Some(error) = preflight_error.into_inner() {
         return Err(error);
@@ -782,14 +785,18 @@ fn import_psd(
 
     // Read before the conversion, which moves the global blocks into the document.
     let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data));
+    let decode_started = std::time::Instant::now();
     let (mut document, warnings, psd_damaged, fatal_error) = psd_import::psd_to_document_owned(file, ctl, merged).ok_or(IoError::Cancelled)?;
+    if trace { eprintln!("composite trace psd-channel-decode+layer-materialization: {:.3} ms", decode_started.elapsed().as_secs_f64() * 1000.0); }
     // Source reads and allocation failures fail the entire open; partial layers are discarded.
     if let Some(e) = fatal_error {
         return Err(e);
     }
     *damaged = psd_damaged;
     document.name = name.to_string();
+    let prep_started = std::time::Instant::now();
     text_import::prepare(&mut document, txt2.as_ref());
+    if trace { eprintln!("composite trace text-layer-preparation: {:.3} ms", prep_started.elapsed().as_secs_f64() * 1000.0); }
     Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false })
 }
 
