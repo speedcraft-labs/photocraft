@@ -25,7 +25,10 @@ fn put_converted_batch<T>(
 ) -> u64 {
     let tile_count = groups.iter().map(|(_, coords)| coords.len()).sum::<usize>();
     let min_batch = if matches!(r.kind, TexKind::Rgba8Direct) { MIN_DIRECT_RGBA8_BATCH_UPLOAD_TILES } else { MIN_BATCH_UPLOAD_TILES };
-    if tile_count < min_batch {
+    // Software adapters such as Windows WARP pay more for staged buffer-to-texture copies than
+    // for the direct writes this replaces. Keep their path identical to the per-tile uploader.
+    let software_adapter = device.adapter_info().device_type == wgpu::DeviceType::Cpu;
+    if software_adapter || tile_count < min_batch {
         groups.iter().zip(bytes).map(|((_, coords), bytes)| put_tiles(device, queue, encoder, r, coords, bytes)).sum()
     } else {
         let uploads: Vec<_> = groups.iter().zip(bytes).map(|((_, coords), bytes)| (coords.as_slice(), bytes.as_slice())).collect();
