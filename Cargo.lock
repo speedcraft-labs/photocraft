@@ -1303,6 +1303,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
+name = "cpu-time"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e393a7668fe1fad3075085b86c781883000b4ede868f43627b34a87c8b7ded"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1348,6 +1358,23 @@ source = "git+https://github.com/storytold/craft-libs?rev=ad8faa1c136ce289e9f132
 dependencies = [
  "rustix 1.1.5",
 ]
+
+[[package]]
+name = "craft-bench"
+version = "0.1.0"
+source = "git+https://github.com/speedcraft-labs/craft-libs?branch=algo%2Fintegration#050b0a6d0661266c11155f21feb4a54b98675213"
+dependencies = [
+ "chrono",
+ "cpu-time",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-blur"
+version = "0.1.0"
+source = "git+https://github.com/speedcraft-labs/craft-libs?rev=f0507f3d4512dfc880388a4b9687e411a27e0b35#f0507f3d4512dfc880388a4b9687e411a27e0b35"
 
 [[package]]
 name = "craft-cms"
@@ -5527,6 +5554,8 @@ dependencies = [
 name = "photocraft-algo"
 version = "0.23.1"
 dependencies = [
+ "craft-bench",
+ "craft-blur",
  "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=163f1b20315ffacaf8a6e085f4ae7fc568c08ff2)",
  "criterion",
  "image",
@@ -5539,7 +5568,7 @@ dependencies = [
  "rustfft",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2",
 ]
 
 [[package]]
@@ -5941,7 +5970,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2",
  "sys-locale",
  "tempfile",
  "toml",

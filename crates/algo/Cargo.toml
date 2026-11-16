@@ -10,6 +10,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+craft-blur = { workspace = true }
 craft-metadata = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
