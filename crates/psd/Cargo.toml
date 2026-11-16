@@ -25,7 +25,12 @@ serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+criterion = { workspace = true }
 photocraft-psd = { path = ".", features = ["testgen"] }
+
+[[bench]]
+name = "rle_decode"
+harness = false
 
 [lints]
 workspace = true
